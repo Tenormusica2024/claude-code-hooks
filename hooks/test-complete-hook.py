@@ -33,7 +33,7 @@ SUCCESS_PATTERNS = [
     re.compile(r"成功", re.IGNORECASE),
     re.compile(r"\bpassed\b", re.IGNORECASE),
     re.compile(r"\bpass\b", re.IGNORECASE),
-    re.compile(r"\bOK\b", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z])OK(?![A-Za-z])", re.IGNORECASE),  # 日本語混在でも検出
     re.compile(r"\ball passed\b", re.IGNORECASE),
 ]
 
