@@ -31,8 +31,6 @@ COMPLETION_PATTERNS = [
     (re.compile(r"完成した"), "完成した"),
     (re.compile(r"完成"), "完成"),
     (re.compile(r"したよ"), "したよ"),
-    (re.compile(r"完了だよ"), "完了だよ"),
-    (re.compile(r"完了♪"), "完了♪"),
     (re.compile(r"したね"), "したね"),
     (re.compile(r"\bdone\b", re.IGNORECASE), "done"),
     (re.compile(r"\bfinished\b", re.IGNORECASE), "finished"),
@@ -107,11 +105,10 @@ def had_file_edits_in_current_turn(transcript_path: str) -> bool:
             continue
         content = msg.get("content", "")
         # tool_result のみで構成されている user メッセージはスキップ
-        if isinstance(content, list):
+        if isinstance(content, list) and content:
             if all(
                 isinstance(b, dict) and b.get("type") == "tool_result"
                 for b in content
-                if isinstance(b, dict)
             ):
                 continue
         last_user_idx = i

@@ -90,11 +90,10 @@ def had_bash_in_current_turn(transcript_path: str) -> bool:
             continue
         content = msg.get("content", "")
         # tool_result のみで構成されている user メッセージはスキップ
-        if isinstance(content, list):
+        if isinstance(content, list) and content:
             if all(
                 isinstance(b, dict) and b.get("type") == "tool_result"
                 for b in content
-                if isinstance(b, dict)
             ):
                 continue
         last_user_idx = i
