@@ -14,6 +14,9 @@ if sys.platform == "win32":
 
 CONTEXT_WINDOW = 120
 
+# ファイル編集系のツール呼び出しがあった場合のみ完了ゲートを発動する
+TRIGGER_TOOLS = {"Edit", "Write", "MultiEdit"}
+
 COMPLETION_PATTERNS = [
     (re.compile(r"完了"), "完了"),
     (re.compile(r"できたよ"), "できたよ"),
@@ -54,6 +57,87 @@ EXCLUSION_PATTERNS = [
 ]
 
 
+def load_transcript(path: str) -> list[dict]:
+    """transcript_path を JSON / JSONL どちらの形式でも読み込む。"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+    except OSError:
+        return []
+
+    # JSON 配列として試みる
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("messages", [])
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # JSONL として試みる
+    messages: list[dict] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                messages.append(obj)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return messages
+
+
+def had_file_edits_in_current_turn(transcript_path: str) -> bool:
+    """直前のユーザー入力以降、Edit/Write/MultiEdit が呼ばれたか確認する。
+
+    チャットだけの返答（ツール未使用）は完了ゲートの対象外にするための判定。
+    """
+    messages = load_transcript(transcript_path)
+    if not messages:
+        return False
+
+    # 最後の「本物のユーザーメッセージ」（tool_result ではない）のインデックスを探す
+    last_user_idx = -1
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        # tool_result のみで構成されている user メッセージはスキップ
+        if isinstance(content, list):
+            if all(
+                isinstance(b, dict) and b.get("type") == "tool_result"
+                for b in content
+                if isinstance(b, dict)
+            ):
+                continue
+        last_user_idx = i
+        break
+
+    if last_user_idx == -1:
+        return False
+
+    # last_user_idx より後のアシスタントメッセージに TRIGGER_TOOLS が含まれるか確認
+    for msg in messages[last_user_idx + 1 :]:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("name", "") in TRIGGER_TOOLS
+            ):
+                return True
+
+    return False
+
+
 def extract_text_from_content(content: object) -> str:
     if isinstance(content, str):
         return content
@@ -91,23 +175,10 @@ def extract_assistant_message(hook_input: dict) -> str:
     if not isinstance(transcript_path, str) or not transcript_path:
         return ""
 
-    try:
-        with open(transcript_path, "r", encoding="utf-8") as f:
-            transcript = json.load(f)
-    except (OSError, json.JSONDecodeError, ValueError):
-        return ""
-
-    if isinstance(transcript, list):
-        for item in reversed(transcript):
-            if isinstance(item, dict) and item.get("role") == "assistant":
-                return extract_text_from_content(item.get("content"))
-
-    if isinstance(transcript, dict):
-        messages = transcript.get("messages")
-        if isinstance(messages, list):
-            for item in reversed(messages):
-                if isinstance(item, dict) and item.get("role") == "assistant":
-                    return extract_text_from_content(item.get("content"))
+    messages = load_transcript(transcript_path)
+    for item in reversed(messages):
+        if isinstance(item, dict) and item.get("role") == "assistant":
+            return extract_text_from_content(item.get("content"))
 
     return ""
 
@@ -153,6 +224,12 @@ def main() -> None:
     if hook_input.get("stop_hook_active"):
         sys.exit(0)
 
+    # ファイル編集ツールが使われていない場合はチャット返答なのでスキップ
+    transcript_path = hook_input.get("transcript_path", "")
+    if isinstance(transcript_path, str) and transcript_path:
+        if not had_file_edits_in_current_turn(transcript_path):
+            sys.exit(0)
+
     assistant_message = extract_assistant_message(hook_input)
     if not assistant_message:
         sys.exit(0)
@@ -174,4 +251,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
