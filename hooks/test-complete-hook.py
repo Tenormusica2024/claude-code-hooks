@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -16,6 +15,9 @@ if sys.platform == "win32":
 
 CONTEXT_WINDOW = 120
 PENDING_ISSUES_PATH = Path(r"C:\Users\Tenormusica\.claude\hooks\pending_issues.json")
+
+# Bash が使われた場合のみテスト完了ゲートを発動する（説明文・会話での誤検知を防ぐ）
+TRIGGER_TOOLS = {"Bash"}
 
 TEST_PATTERNS = [
     re.compile(r"テスト", re.IGNORECASE),
@@ -35,6 +37,88 @@ SUCCESS_PATTERNS = [
     re.compile(r"(?<![A-Za-z])OK(?![A-Za-z])", re.IGNORECASE),  # 日本語混在でも検出
     re.compile(r"\ball passed\b", re.IGNORECASE),
 ]
+
+
+def load_transcript(path: str) -> list[dict]:
+    """transcript_path を JSON / JSONL どちらの形式でも読み込む。"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+    except OSError:
+        return []
+
+    # JSON 配列として試みる
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("messages", [])
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # JSONL として試みる
+    messages: list[dict] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                messages.append(obj)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return messages
+
+
+def had_bash_in_current_turn(transcript_path: str) -> bool:
+    """直前のユーザー入力以降、Bash が呼ばれたか確認する。
+
+    Bash 未使用 = テストを実行していない会話ターンなので
+    テスト完了ゲートの対象外にするための判定。
+    """
+    messages = load_transcript(transcript_path)
+    if not messages:
+        return False
+
+    # 最後の「本物のユーザーメッセージ」（tool_result ではない）のインデックスを探す
+    last_user_idx = -1
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        # tool_result のみで構成されている user メッセージはスキップ
+        if isinstance(content, list):
+            if all(
+                isinstance(b, dict) and b.get("type") == "tool_result"
+                for b in content
+                if isinstance(b, dict)
+            ):
+                continue
+        last_user_idx = i
+        break
+
+    if last_user_idx == -1:
+        return False
+
+    # last_user_idx より後のアシスタントメッセージに Bash が含まれるか確認
+    for msg in messages[last_user_idx + 1 :]:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("name", "") in TRIGGER_TOOLS
+            ):
+                return True
+
+    return False
 
 
 def extract_text_from_content(content: object) -> str:
@@ -74,23 +158,10 @@ def extract_assistant_message(hook_input: dict) -> str:
     if not isinstance(transcript_path, str) or not transcript_path:
         return ""
 
-    try:
-        with open(transcript_path, "r", encoding="utf-8") as f:
-            transcript = json.load(f)
-    except (OSError, json.JSONDecodeError, ValueError):
-        return ""
-
-    if isinstance(transcript, list):
-        for item in reversed(transcript):
-            if isinstance(item, dict) and item.get("role") == "assistant":
-                return extract_text_from_content(item.get("content"))
-
-    if isinstance(transcript, dict):
-        messages = transcript.get("messages")
-        if isinstance(messages, list):
-            for item in reversed(messages):
-                if isinstance(item, dict) and item.get("role") == "assistant":
-                    return extract_text_from_content(item.get("content"))
+    messages = load_transcript(transcript_path)
+    for item in reversed(messages):
+        if isinstance(item, dict) and item.get("role") == "assistant":
+            return extract_text_from_content(item.get("content"))
 
     return ""
 
@@ -130,7 +201,9 @@ def detect_test_success(text: str) -> list[dict[str, str]]:
     for test_pattern in TEST_PATTERNS:
         for match in test_pattern.finditer(text):
             context = get_surrounding_context(text, match.start(), match.end())
-            success_match = next((pattern.search(context) for pattern in SUCCESS_PATTERNS if pattern.search(context)), None)
+            success_match = next(
+                (p.search(context) for p in SUCCESS_PATTERNS if p.search(context)), None
+            )
             if not success_match:
                 continue
             findings.append(
@@ -158,6 +231,12 @@ def main() -> None:
 
     if has_pending_issues():
         sys.exit(0)
+
+    # Bash が使われていない場合はテスト未実行の会話ターンなのでスキップ
+    transcript_path = hook_input.get("transcript_path", "")
+    if isinstance(transcript_path, str) and transcript_path:
+        if not had_bash_in_current_turn(transcript_path):
+            sys.exit(0)
 
     assistant_message = extract_assistant_message(hook_input)
     if not assistant_message:
