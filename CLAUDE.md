@@ -65,7 +65,7 @@ Claude Code品質ガードレール用 Stop hooks のリポジトリ。
 
 **動作:**
 1. トリガー検出時、対象ファイルの `.bak` バックアップを作成（タイムスタンプ+マイクロ秒で一意化）
-2. `.claude/updates/doc_update_history.md` に更新履歴ディレクトリを確保
+2. `cwd/.claude/updates/doc_update_history.md` に更新履歴を集約（対象ファイルの場所に関わらず常に cwd 基準）
 3. `additionalContext` JSONをstdoutに出力してClaudeに更新手順を注入
 
 **優先順位:** 両方のトリガーワードを含むプロンプトでは、`マスタードキュメント` を優先して評価する

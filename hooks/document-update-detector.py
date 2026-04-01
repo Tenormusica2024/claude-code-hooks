@@ -76,12 +76,11 @@ def extract_explicit_md_path(prompt: str, cwd: Path) -> Path | None:
     return None
 
 
-def get_history_path(target_file: Path) -> Path:
+def get_history_path(cwd: Path) -> Path:
+    # 履歴は対象ファイルの場所に関わらず常に cwd/.claude/updates/ に集約する。
+    # 明示パスが別ディレクトリのファイルを指す場合も分散しない。
     return (
-        target_file.parent
-        / ".claude"
-        / "updates"
-        / "doc_update_history.md"
+        cwd / ".claude" / "updates" / "doc_update_history.md"
     ).resolve(strict=False)
 
 
@@ -226,7 +225,7 @@ def main() -> int:
     # ターゲットが存在する場合のみバックアップと履歴ディレクトリを確保する
     backup_path = backup_target_file(target_file)
 
-    history_path = get_history_path(target_file)
+    history_path = get_history_path(cwd)
     try:
         ensure_history_dir(history_path)
     except Exception as exc:
