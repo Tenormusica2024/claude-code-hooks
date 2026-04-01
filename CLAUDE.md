@@ -52,3 +52,22 @@ Claude Code品質ガードレール用 Stop hooks のリポジトリ。
 [test-complete-hook] → 要確認あり？ → STOP
                     → なし → /ifr --d 発動
 ```
+
+---
+
+### document-update-detector.py（UserPromptSubmit hook）
+
+ユーザーの発言にドキュメント更新トリガーを検出し、Claudeにadditionalcontextを注入してドキュメント更新を自動化する。
+
+**トリガーワード:**
+- `Claude.md` / `CLAUDE.md` → cwdのCLAUDE.mdを更新
+- `マスタードキュメント` → project-progress-master.md（または明示パス）を更新
+
+**動作:**
+1. トリガー検出時、対象ファイルの `.bak` バックアップを作成
+2. `.claude/updates/doc_update_history.md` に更新履歴ディレクトリを確保
+3. `additionalContext` JSONをstdoutに出力してClaudeに更新手順を注入
+
+**設定:**
+- `MASTER_DOC_PATH` 環境変数でマスタードキュメントのパスを上書き可能
+- デフォルト: `D:\antigravity_projects\VaultD\Projects\project-progress-master.md`
