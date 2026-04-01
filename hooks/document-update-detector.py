@@ -91,7 +91,7 @@ def ensure_history_dir(history_path: Path) -> None:
 
 def backup_target_file(target_file: Path) -> Path | None:
     # タイムスタンプ付きバックアップ名で上書きを防ぐ
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup_path = target_file.with_name(f"{target_file.name}.{timestamp}.bak").resolve(strict=False)
     try:
         shutil.copy2(target_file, backup_path)
@@ -175,9 +175,9 @@ def detect_trigger(
     prompt: str,
     cwd: Path,
 ) -> tuple[str, Path] | None:
-    if CLAUDE_TRIGGER_RE.search(prompt):
-        return "claude", (cwd / "CLAUDE.md").resolve(strict=False)
-
+    # マスタードキュメントトリガーを先に評価する。
+    # CLAUDE.md への言及がプロンプトにあっても「コンテキスト参照」として扱い、
+    # 更新対象の選択には影響させない。
     if MASTER_TRIGGER_RE.search(prompt):
         explicit_path = extract_explicit_md_path(prompt, cwd)
         # CLAUDE.md という名前の明示パスはコンテキスト参照として除外する。
@@ -185,6 +185,9 @@ def detect_trigger(
         if explicit_path is not None and explicit_path.name.upper() != "CLAUDE.MD":
             return "master", explicit_path
         # デフォルト: 「マスタードキュメント」= cwd の CLAUDE.md（プロジェクト最上位ルール）
+        return "claude", (cwd / "CLAUDE.md").resolve(strict=False)
+
+    if CLAUDE_TRIGGER_RE.search(prompt):
         return "claude", (cwd / "CLAUDE.md").resolve(strict=False)
 
     return None
@@ -197,7 +200,12 @@ def main() -> int:
         return 0
 
     prompt = str(payload.get("prompt", ""))
-    cwd = resolve_path(str(payload.get("cwd", "")) or os.getcwd())
+    raw_cwd = str(payload.get("cwd", "")).strip()
+    if not raw_cwd:
+        # cwd が渡らない異常系では処理しない（os.getcwd() は意図しないパスになりうる）
+        log_error("Hook input missing 'cwd'; skipping.")
+        return 0
+    cwd = resolve_path(raw_cwd)
     stop_hook_active = bool(payload.get("stop_hook_active", False))
 
     if stop_hook_active:

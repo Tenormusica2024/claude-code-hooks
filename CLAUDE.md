@@ -61,13 +61,11 @@ Claude Code品質ガードレール用 Stop hooks のリポジトリ。
 
 **トリガーワード:**
 - `Claude.md` / `CLAUDE.md` → cwdのCLAUDE.mdを更新
-- `マスタードキュメント` → project-progress-master.md（または明示パス）を更新
+- `マスタードキュメント` → cwdのCLAUDE.md（プロジェクト最上位ルール）を更新。プロンプト内に別の明示パス（CLAUDE.md 以外）があればそちらを優先
 
 **動作:**
-1. トリガー検出時、対象ファイルの `.bak` バックアップを作成
+1. トリガー検出時、対象ファイルの `.bak` バックアップを作成（タイムスタンプ+マイクロ秒で一意化）
 2. `.claude/updates/doc_update_history.md` に更新履歴ディレクトリを確保
 3. `additionalContext` JSONをstdoutに出力してClaudeに更新手順を注入
 
-**設定:**
-- `MASTER_DOC_PATH` 環境変数でマスタードキュメントのパスを上書き可能
-- デフォルト: `D:\antigravity_projects\VaultD\Projects\project-progress-master.md`
+**優先順位:** 両方のトリガーワードを含むプロンプトでは、`マスタードキュメント` を優先して評価する
