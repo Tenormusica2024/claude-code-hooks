@@ -69,3 +69,26 @@ Claude Code品質ガードレール用 Stop hooks のリポジトリ。
 3. `additionalContext` JSONをstdoutに出力してClaudeに更新手順を注入
 
 **優先順位:** 両方のトリガーワードを含むプロンプトでは、`マスタードキュメント` を優先して評価する
+
+---
+
+### global-claude-md-appender.py（UserPromptSubmit hook）
+
+ユーザーの発言にグローバル CLAUDE.md への追記トリガーを検出し、追記専用の additionalContext を注入する。
+
+**トリガーワード:** `グローバルCLAUDE.md`（または `グローバルClaude.md`）＋以下のいずれか
+- `を更新して`
+- `に追記して`
+- `に記載して`
+
+**対象ファイル:** `C:\Users\Tenormusica\.claude\CLAUDE.md`（固定・引数なし）
+
+**動作:**
+1. トリガー検出時、対象ファイルの `.bak` バックアップを作成（タイムスタンプ+マイクロ秒で一意化）
+2. `~/.claude/updates/doc_update_history.md` に更新履歴を集約
+3. `additionalContext` JSONをstdoutに出力してClaudeに追記手順を注入
+
+**追記モードの制約（document-update-detectorとの違い）:**
+- **追記のみ** — 既存コンテンツの削除・リライト・整合性チェックは行わない
+- **70%縮小ルールなし** — グローバル CLAUDE.md はユーザー確認なしで大幅変更しない
+- **短く要点のみ** — 追記内容は "なるべく短く要点のみで言語化する" ガイドラインに従う
