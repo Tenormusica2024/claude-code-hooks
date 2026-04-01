@@ -3,20 +3,19 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import re
 import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
+
 # "CLAUDE.md" の大文字小文字バリアントすべてに一致させる
 CLAUDE_TRIGGER_RE = re.compile(r"CLAUDE\.md", re.IGNORECASE)
 MASTER_TRIGGER_RE = re.compile(r"マスタードキュメント")
 QUOTED_MD_PATH_RE = re.compile(r"""["']([^"'\r\n]+?\.md)["']""", re.IGNORECASE)
-UNQUOTED_MD_PATH_RE = re.compile(
-    r"""(?<!\w)([A-Za-z]:[\\/][^\s"'<>|?*\r\n]+?\.md|[\\/][^\s"'<>|?*\r\n]+?\.md|\.\.?[\\/][^\s"'<>|?*\r\n]+?\.md)""",
-    re.IGNORECASE,
-)
+# グローバルCLAUDE.md 専用フック（global-claude-md-appender）が担当するプロンプトを除外する
+# これにより両フックが同時発火して cwd/CLAUDE.md へ70%縮小コンテキストが注入される問題を防ぐ
+GLOBAL_CLAUDE_GUARD_RE = re.compile(r"グローバル(?:Claude|CLAUDE)\.md", re.IGNORECASE)
 
 
 def configure_stdio() -> None:
@@ -62,19 +61,6 @@ def resolve_path(path_str: str, base_dir: Path | None = None) -> Path:
     if not path.is_absolute() and base_dir is not None:
         path = base_dir / path
     return path.resolve(strict=False)
-
-
-def extract_explicit_md_path(prompt: str, cwd: Path) -> Path | None:
-    """プロンプト内の任意の .md パスを抽出する（CLAUDE.md 更新トリガー用）。"""
-    quoted_match = QUOTED_MD_PATH_RE.search(prompt)
-    if quoted_match:
-        return resolve_path(quoted_match.group(1), cwd)
-
-    unquoted_match = UNQUOTED_MD_PATH_RE.search(prompt)
-    if unquoted_match:
-        return resolve_path(unquoted_match.group(1), cwd)
-
-    return None
 
 
 def extract_master_doc_path(prompt: str, cwd: Path) -> Path | None:
@@ -195,6 +181,12 @@ def detect_trigger(
     prompt: str,
     cwd: Path,
 ) -> tuple[str, Path] | None:
+    # グローバルCLAUDE.md を対象とする要求は global-claude-md-appender に委ねる。
+    # CLAUDE_TRIGGER_RE はグローバル指定も誤検知するため、ここで早期リターンして
+    # cwd/CLAUDE.md への 70% 縮小コンテキストが二重注入されるのを防ぐ。
+    if GLOBAL_CLAUDE_GUARD_RE.search(prompt):
+        return None
+
     # マスタードキュメントトリガーを CLAUDE.md トリガーより先に評価する。
     # 両方を含むプロンプトでも「マスタードキュメント」の意図が優先される。
     if MASTER_TRIGGER_RE.search(prompt):

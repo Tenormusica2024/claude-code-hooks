@@ -17,7 +17,7 @@ LINE_STRONG_WARN_THRESHOLD = 200
 GLOBAL_CLAUDE_MD = Path(r"C:\Users\Tenormusica\.claude\CLAUDE.md")
 
 # トリガー: 「グローバルCLAUDE.md」を含み、追記・更新・記載のいずれかを含むプロンプト
-# 大文字小文字は問わない（CLAUDE.md 部分）
+# re.IGNORECASE は ASCII 部分（Claude/CLAUDE）にのみ効く。「グローバル」は大小無視対象外。
 GLOBAL_TRIGGER_RE = re.compile(
     r"グローバル(?:Claude|CLAUDE)\.md",
     re.IGNORECASE,
@@ -78,10 +78,6 @@ def backup_target_file(target_file: Path) -> Path | None:
         return None
 
 
-def get_history_path(cwd: Path) -> Path:
-    return (cwd / ".claude" / "updates" / "doc_update_history.md").resolve(strict=False)
-
-
 def ensure_history_dir(history_path: Path) -> None:
     history_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -95,7 +91,8 @@ def count_lines(file: Path) -> int:
     """ファイルの行数を返す。読み取り失敗時は 0 を返す。"""
     try:
         return len(file.read_text(encoding="utf-8", errors="replace").splitlines())
-    except Exception:
+    except Exception as exc:
+        log_error(f"Failed to count lines in {file}: {exc}")
         return 0
 
 
@@ -161,7 +158,7 @@ def build_append_context(
         "- This is the GLOBAL Claude instructions file — any change is permanent and affects ALL sessions\n"
         "- Confirm with the user before writing if the scope of the append is ambiguous\n"
         "- Never rewrite or restructure existing sections without explicit user instruction"
-    ).replace("{target_file}", str(target_file))
+    )
 
 
 def main() -> int:
