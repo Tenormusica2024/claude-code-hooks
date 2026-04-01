@@ -16,7 +16,8 @@ _MCP_TEST_TOOL_KEYWORDS = (
 )
 
 _ANSI_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-_CLAUSE_SPLIT_RE = re.compile(r"[。.!？！\n]+|(?:\s*[、]\s*)")
+# 半角ピリオドは「後ろが空白or行末」の場合のみ分割（v1.2.3 やファイルパス等の誤分割を防ぐ）
+_CLAUSE_SPLIT_RE = re.compile(r"[。!？！\n]+|(?:\s*[、]\s*)|\.(?=\s|$)")
 
 
 def strip_ansi(text: str) -> str:
@@ -279,7 +280,7 @@ _FAILURE_OUTPUT_PATTERNS = [
     re.compile(r"\bFAILED\b", re.IGNORECASE),
     re.compile(r"\bFAIL\b(?!\w)", re.IGNORECASE),
     re.compile(r"\bAssertionError\b", re.IGNORECASE),
-    re.compile(r"\bError:", re.IGNORECASE),
+    re.compile(r"\b[A-Z]\w*Error:"),  # Python例外クラス形式（CamelCase）のみ。"No Error:" 等の誤検出を防ぐ
     re.compile(r"\bTraceback\b", re.IGNORECASE),
     re.compile(r"\b0 passed\b", re.IGNORECASE),
     re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),

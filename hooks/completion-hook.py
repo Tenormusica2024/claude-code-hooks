@@ -37,7 +37,7 @@ _COMPLETION_PATTERNS = [
     re.compile(r"対応した"),
     re.compile(r"終わった"),
     re.compile(r"完成した"),
-    re.compile(r"完成"),
+    # 「完成」単体は「未完成」「完成度」「完成形」等にも誤マッチするため除外
     re.compile(r"\bdone\b", re.IGNORECASE),
     re.compile(r"\bfinished\b", re.IGNORECASE),
     re.compile(r"\bimplemented\b", re.IGNORECASE),
@@ -66,9 +66,7 @@ _EXCLUSION_PATTERNS = [
     re.compile(r"コメント"),
     re.compile(r"ドキュメント"),
     re.compile(r"README", re.IGNORECASE),
-    re.compile(r"テスト"),
-    re.compile(r"\btest\b", re.IGNORECASE),
-    re.compile(r"\bspec\b", re.IGNORECASE),
+    # テスト関連ワードは除外しない: 「テストを実装完了した」等の正当な完了宣言を誤減点しないため
     re.compile(r"確認済み"),
     re.compile(r"テスト済み"),
     re.compile(r"\bpass(?:ed)?\b", re.IGNORECASE),
