@@ -30,6 +30,11 @@ MASTER_TRIGGER_RE = re.compile(r"マスタードキュメント")
 MASTER_ACTION_RE = re.compile(
     r"(?:を更新して|に追記して|に記載して|に追加して|に反映して|を修正して)",
 )
+# 「ドキュメントを更新して」等の省略形（CLAUDE.md と明示しない場合）→ cwd/CLAUDE.md をデフォルトターゲット
+# 「マスタードキュメント」は MASTER_TRIGGER_RE が先に処理するため、detect_trigger でリターン済みの後に評価される
+DOC_SHORTHAND_TRIGGER_RE = re.compile(r"ドキュメント(?!の更新が必要|を確認して|を読んで|を参照)")
+DOC_SHORTHAND_ACTION_RE = re.compile(r"(?:を更新して|に記載して|に反映して|を修正して)")
+DOC_SHORTHAND_APPEND_RE = re.compile(r"(?:に追記して|に追加して)")
 QUOTED_MD_PATH_RE = re.compile(r"""["']([^"'\r\n]+?\.md)["']""", re.IGNORECASE)
 # 参照文脈の quoted path を除外するパターン。
 # 「'notes.md' を参考にマスタードキュメントを更新して」のように
@@ -219,6 +224,17 @@ def detect_trigger(
             if is_append:
                 return "claude_append", target
             # 更新系（を更新して/に記載して/に反映して/を修正して）は70%縮小コンテキスト
+            return "claude", target
+
+    # 「ドキュメントを更新して」省略形 → cwd/CLAUDE.md を対象。
+    # マスタードキュメント・グローバルCLAUDE.md のガードはここより上で早期リターン済み。
+    # 観察文（「ドキュメントの更新が必要」等）はアクション語にマッチしないため発火しない。
+    if DOC_SHORTHAND_TRIGGER_RE.search(prompt):
+        explicit_path = extract_explicit_md_path(prompt, cwd)
+        target = explicit_path if explicit_path is not None else (cwd / "CLAUDE.md").resolve(strict=False)
+        if DOC_SHORTHAND_APPEND_RE.search(prompt):
+            return "claude_append", target
+        if DOC_SHORTHAND_ACTION_RE.search(prompt):
             return "claude", target
 
     return None
