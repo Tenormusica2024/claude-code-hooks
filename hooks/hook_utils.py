@@ -3,27 +3,60 @@
 from __future__ import annotations
 
 import json
+import re
+
+
+_MUTATION_TOOL_NAMES = {"Edit", "Write", "MultiEdit"}
+_MCP_TEST_TOOL_KEYWORDS = (
+    "playwright",
+    "puppeteer",
+    "browser",
+    "e2e",
+    "cypress",
+)
+
+_ANSI_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_CLAUSE_SPLIT_RE = re.compile(r"[。.!？！\n]+|(?:\s*[、]\s*)")
+
+
+def strip_ansi(text: str) -> str:
+    """ANSI エスケープコードや簡易制御コードを除去する。"""
+    if not isinstance(text, str) or not text:
+        return ""
+    cleaned = _ANSI_RE.sub("", text)
+    cleaned = cleaned.replace("\r", "\n")
+    return cleaned
+
+
+def split_clauses(text: str) -> list[str]:
+    """句点・改行・!?・読点で節に分割する。"""
+    if not isinstance(text, str) or not text:
+        return []
+    parts = _CLAUSE_SPLIT_RE.split(text)
+    return [part.strip() for part in parts if part and part.strip()]
 
 
 def load_transcript(path: str) -> list[dict]:
     """transcript_path を JSON / JSONL どちらの形式でも読み込む。"""
+    if not isinstance(path, str) or not path:
+        return []
     try:
         with open(path, "r", encoding="utf-8") as f:
             raw = f.read()
     except OSError:
         return []
 
-    # JSON 配列 / dict として試みる
     try:
         data = json.loads(raw)
         if isinstance(data, list):
-            return data
+            return [item for item in data if isinstance(item, dict)]
         if isinstance(data, dict):
-            return data.get("messages", [])
-    except (json.JSONDecodeError, ValueError):
+            messages = data.get("messages", [])
+            if isinstance(messages, list):
+                return [item for item in messages if isinstance(item, dict)]
+    except (json.JSONDecodeError, ValueError, TypeError):
         pass
 
-    # JSONL として試みる
     messages: list[dict] = []
     for line in raw.splitlines():
         line = line.strip()
@@ -31,98 +64,195 @@ def load_transcript(path: str) -> list[dict]:
             continue
         try:
             obj = json.loads(line)
-            if isinstance(obj, dict):
-                messages.append(obj)
-        except (json.JSONDecodeError, ValueError):
-            pass
+        except (json.JSONDecodeError, ValueError, TypeError):
+            continue
+        if isinstance(obj, dict):
+            messages.append(obj)
     return messages
 
 
-def had_tools_in_current_turn(transcript_path: str, trigger_tools: set[str]) -> bool:
-    """直前のユーザー入力以降、指定したツールが呼ばれたか確認する。
-
-    Args:
-        transcript_path: Claude Code が渡す会話ログのファイルパス。
-        trigger_tools: 検出対象のツール名集合（例: {"Edit", "Write", "MultiEdit"}）。
-
-    Returns:
-        trigger_tools のいずれかが呼ばれていれば True。
-        transcript が読めない・ユーザー入力が見つからない場合は False。
-    """
-    messages = load_transcript(transcript_path)
-    if not messages:
+def _is_tool_result_only_user_message(message: dict) -> bool:
+    if not isinstance(message, dict) or message.get("role") != "user":
         return False
+    content = message.get("content")
+    if not isinstance(content, list) or not content:
+        return False
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_result":
+            return False
+    return True
 
-    # 最後の「本物のユーザーメッセージ」（tool_result のみで構成されていないもの）を探す
-    last_user_idx = -1
+
+def _find_last_real_user_index(messages: list[dict]) -> int:
     for i in range(len(messages) - 1, -1, -1):
-        msg = messages[i]
-        if not isinstance(msg, dict) or msg.get("role") != "user":
+        message = messages[i]
+        if not isinstance(message, dict) or message.get("role") != "user":
             continue
-        content = msg.get("content", "")
-        # content が非空リストかつ全要素が tool_result の場合はスキップ
-        if isinstance(content, list) and content:
-            if all(
-                isinstance(b, dict) and b.get("type") == "tool_result"
-                for b in content
-            ):
-                continue
-        last_user_idx = i
-        break
-
-    if last_user_idx == -1:
-        return False
-
-    # last_user_idx より後のアシスタントメッセージに trigger_tools が含まれるか確認
-    for msg in messages[last_user_idx + 1 :]:
-        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+        if _is_tool_result_only_user_message(message):
             continue
-        content = msg.get("content", [])
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if (
-                isinstance(block, dict)
-                and block.get("type") == "tool_use"
-                and block.get("name", "") in trigger_tools
-            ):
-                return True
-
-    return False
+        return i
+    return -1
 
 
 def extract_text_from_content(content: object) -> str:
-    """Claude メッセージの content フィールドからテキストを抽出する。"""
     if isinstance(content, str):
         return content
+
     if isinstance(content, list):
         parts: list[str] = []
         for block in content:
             if isinstance(block, str):
                 parts.append(block)
-            elif isinstance(block, dict):
-                if block.get("type") == "text":
-                    text = block.get("text")
-                    if isinstance(text, str):
-                        parts.append(text)
-                elif isinstance(block.get("content"), str):
-                    parts.append(block["content"])
+                continue
+            if not isinstance(block, dict):
+                continue
+
+            block_type = block.get("type")
+            if block_type == "text":
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                continue
+
+            nested = block.get("content")
+            if isinstance(nested, str):
+                parts.append(nested)
+            elif isinstance(nested, list):
+                nested_text = extract_text_from_content(nested)
+                if nested_text:
+                    parts.append(nested_text)
+
         return "\n".join(part for part in parts if part)
+
     if isinstance(content, dict):
         text = content.get("text")
         if isinstance(text, str):
             return text
+        nested = content.get("content")
+        if isinstance(nested, (str, list, dict)):
+            return extract_text_from_content(nested)
+
     return ""
 
 
-def extract_assistant_message(hook_input: dict) -> str:
-    """フック入力から最後のアシスタントメッセージのテキストを取得する。
+def _extract_tool_result_text(block: dict) -> str:
+    if not isinstance(block, dict):
+        return ""
+    return extract_text_from_content(block.get("content"))
 
-    優先順位:
-    1. hook_input["last_assistant_message"]
-    2. hook_input の他のテキストフィールド
-    3. transcript_path のログから逆順スキャン
+
+def _get_tool_result_id(block: dict) -> str:
+    if not isinstance(block, dict):
+        return ""
+    for key in ("tool_use_id", "toolUseId", "id"):
+        value = block.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def scan_transcript_tool_outputs(transcript_path: str) -> dict:
     """
+    直近ユーザー入力以降の tool_result を収集する。
+
+    Returns:
+        {
+          "bash_outputs": list[str],
+          "all_outputs": list[str],
+          "tool_names_used": list[str],
+          "has_bash": bool,
+          "has_mutation_tool": bool,
+          "has_mcp_test_tool": bool,
+        }
+    """
+    result: dict = {
+        "bash_outputs": [],
+        "all_outputs": [],
+        "tool_names_used": [],
+        "has_bash": False,
+        "has_mutation_tool": False,
+        "has_mcp_test_tool": False,
+    }
+
+    messages = load_transcript(transcript_path)
+    if not messages:
+        return result
+
+    last_user_idx = _find_last_real_user_index(messages)
+    if last_user_idx == -1:
+        return result
+
+    tool_name_by_id: dict[str, str] = {}
+    tool_names_used: list[str] = []
+    known_tool_names: set[str] = set()
+
+    for message in messages[last_user_idx + 1:]:
+        if not isinstance(message, dict):
+            continue
+
+        role = message.get("role")
+        content = message.get("content")
+
+        # アシスタントメッセージから tool_use の name と id を対応付ける
+        if role == "assistant" and isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                tool_name = block.get("name")
+                if not isinstance(tool_name, str) or not tool_name:
+                    continue
+                tool_id = block.get("id")
+                if isinstance(tool_id, str) and tool_id:
+                    tool_name_by_id[tool_id] = tool_name
+            continue
+
+        if role != "user" or not isinstance(content, list):
+            continue
+
+        # tool_result ブロックを収集する
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+
+            text = _extract_tool_result_text(block)
+            if text:
+                result["all_outputs"].append(text)
+
+            tool_name = tool_name_by_id.get(_get_tool_result_id(block), "")
+            if tool_name:
+                if tool_name not in known_tool_names:
+                    tool_names_used.append(tool_name)
+                    known_tool_names.add(tool_name)
+
+                lower_name = tool_name.lower()
+                if tool_name == "Bash" or lower_name == "bash":
+                    result["has_bash"] = True
+                    if text:
+                        result["bash_outputs"].append(text)
+
+                if tool_name in _MUTATION_TOOL_NAMES:
+                    result["has_mutation_tool"] = True
+
+                if any(keyword in lower_name for keyword in _MCP_TEST_TOOL_KEYWORDS):
+                    result["has_mcp_test_tool"] = True
+
+    result["tool_names_used"] = tool_names_used
+    return result
+
+
+def had_tools_in_current_turn(transcript_path: str, trigger_tools: set[str]) -> bool:
+    """直前のユーザー入力以降、指定ツールが呼ばれたか確認する（後方互換）。"""
+    if not trigger_tools:
+        return False
+    scan = scan_transcript_tool_outputs(transcript_path)
+    for tool_name in scan["tool_names_used"]:
+        if tool_name in trigger_tools:
+            return True
+    return False
+
+
+def extract_assistant_message(hook_input: dict) -> str:
+    """フック入力から最後のアシスタントメッセージのテキストを取得する。"""
     value = hook_input.get("last_assistant_message")
     if isinstance(value, str) and value:
         return value
@@ -140,5 +270,74 @@ def extract_assistant_message(hook_input: dict) -> str:
     for item in reversed(messages):
         if isinstance(item, dict) and item.get("role") == "assistant":
             return extract_text_from_content(item.get("content"))
-
     return ""
+
+
+# --- テストフレームワーク出力検出 ---
+
+_FAILURE_OUTPUT_PATTERNS = [
+    re.compile(r"\bFAILED\b", re.IGNORECASE),
+    re.compile(r"\bFAIL\b(?!\w)", re.IGNORECASE),
+    re.compile(r"\bAssertionError\b", re.IGNORECASE),
+    re.compile(r"\bError:", re.IGNORECASE),
+    re.compile(r"\bTraceback\b", re.IGNORECASE),
+    re.compile(r"\b0 passed\b", re.IGNORECASE),
+    re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
+    re.compile(r"\b[1-9]\d*\s+failures?\b", re.IGNORECASE),
+]
+
+_SUCCESS_OUTPUT_PATTERNS = [
+    re.compile(r"\b\d+\s+passed\b", re.IGNORECASE),
+    re.compile(r"===.*\bpassed\b.*===", re.IGNORECASE),
+    re.compile(r"\bPASSED\b"),
+    re.compile(r"\bRan\s+\d+\s+tests?\s+in\b", re.IGNORECASE),
+    re.compile(r"\bTests:\s+\d+\s+passed\b", re.IGNORECASE),
+    re.compile(r"(?m)^PASS\s"),
+    re.compile(r"(?m)^\s*✓\s"),
+    re.compile(r"\bok\s+\S+\s+[\d.]+s\b", re.IGNORECASE),
+    re.compile(r"(?m)^--- PASS:"),
+    re.compile(r"\btest result:\s+ok\b", re.IGNORECASE),
+    re.compile(r"\b\d+\s+passed;\s+0\s+failed\b", re.IGNORECASE),
+    re.compile(r"(?m)^OK$"),
+    re.compile(r"\b\d+\s+passing\b", re.IGNORECASE),
+    re.compile(r"\b\d+\s+examples?,\s+0\s+failures?\b", re.IGNORECASE),
+    re.compile(r"\bAll tests passed\b", re.IGNORECASE),
+]
+
+_TEST_COMMAND_PATTERNS = [
+    re.compile(r"\bpytest\b", re.IGNORECASE),
+    re.compile(r"\bpython\s+-m\s+pytest\b", re.IGNORECASE),
+    re.compile(r"\bnpm\s+test\b", re.IGNORECASE),
+    re.compile(r"\byarn\s+test\b", re.IGNORECASE),
+    re.compile(r"\bpnpm\s+test\b", re.IGNORECASE),
+    re.compile(r"\bvitest\b", re.IGNORECASE),
+    re.compile(r"\bjest\b", re.IGNORECASE),
+    re.compile(r"\bgo\s+test\b", re.IGNORECASE),
+    re.compile(r"\bcargo\s+test\b", re.IGNORECASE),
+    re.compile(r"\brspec\b", re.IGNORECASE),
+]
+
+
+def detect_test_framework_output(text: str) -> bool:
+    """典型的なテストフレームワーク成功出力を検出する。失敗パターンがあれば False。"""
+    cleaned = strip_ansi(text)
+    if not cleaned:
+        return False
+    for pattern in _FAILURE_OUTPUT_PATTERNS:
+        if pattern.search(cleaned):
+            return False
+    for pattern in _SUCCESS_OUTPUT_PATTERNS:
+        if pattern.search(cleaned):
+            return True
+    return False
+
+
+def detect_test_command_in_output(text: str) -> bool:
+    """Bash 出力中にテストコマンド実行の痕跡があるか確認する。"""
+    cleaned = strip_ansi(text)
+    if not cleaned:
+        return False
+    for pattern in _TEST_COMMAND_PATTERNS:
+        if pattern.search(cleaned):
+            return True
+    return False
