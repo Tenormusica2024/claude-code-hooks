@@ -164,7 +164,7 @@ def extract_purpose_comment(md_file: Path) -> str:
     """ファイル先頭の <!-- 目的: ... --> コメントを読み取って返す。
     コメントが見つからない場合はファイル名（拡張子なし）を返す。"""
     try:
-        # 先頭512バイトのみ読んでパフォーマンスを確保する
+        # テキストモードで先頭512文字を読む（目的コメントは常にファイル先頭にあるため十分）
         with md_file.open(encoding="utf-8", errors="replace") as f:
             head = f.read(512)
         m = re.search(r"<!--\s*目的:\s*(.+?)\s*-->", head)
@@ -198,12 +198,21 @@ def scan_doc_candidates(cwd: Path) -> list[tuple[str, Path]]:
     return candidates
 
 
-def build_doc_smart_context(cwd: Path, history_path: Path) -> str:
-    """「ドキュメントを更新して」省略形用コンテキスト。
+def build_doc_smart_context(
+    cwd: Path,
+    history_path: Path,
+    append_mode: bool = False,
+) -> str:
+    """「ドキュメントを更新/追記して」省略形用コンテキスト。
 
     候補ファイルを列挙して Claude に適切なターゲットを選ばせ、
-    選択後に通常の更新手順（claude コンテキスト相当）を実行させる。
-    バックアップは Claude がターゲットを確定した後に自己判断で行う。
+    選択後に通常の更新手順または追記手順を実行させる。
+    バックアップは Claude がターゲットを確定した直後・変更前に自ら作成する。
+
+    Args:
+        cwd: プロジェクトルートディレクトリ
+        history_path: 更新履歴ファイルのパス
+        append_mode: True のとき追記専用モード（70% 縮小・整合性チェックなし）
     """
     candidates = scan_doc_candidates(cwd)
 
@@ -216,11 +225,14 @@ def build_doc_smart_context(cwd: Path, history_path: Path) -> str:
             "Only ask the user for confirmation. Do not create any files until confirmed."
         )
 
-    lines = ["[DOCUMENT UPDATE TRIGGERED]"]
+    trigger_label = "DOCUMENT APPEND" if append_mode else "DOCUMENT UPDATE"
+    action_verb = "追記して" if append_mode else "更新して"
+
+    lines = [f"[{trigger_label} TRIGGERED]"]
     lines.append(
-        "The user said 'ドキュメントを更新して' without specifying a target file. "
+        f"The user said 'ドキュメントを{action_verb}' without specifying a target file. "
         "Select the most appropriate document from the candidates below based on "
-        "what was discussed in the current session, then perform the update.\n"
+        f"what was discussed in the current session, then perform the {'append' if append_mode else 'update'}.\n"
     )
     lines.append("## Candidate documents\n")
     for i, (purpose, path) in enumerate(candidates, start=1):
@@ -231,19 +243,34 @@ def build_doc_smart_context(cwd: Path, history_path: Path) -> str:
         "1. Decide which document best matches the current session context "
         "(prefer a specific rules/ file over CLAUDE.md when the change is narrow in scope)"
     )
-    lines.append("2. Read the selected file using the Read tool")
-    lines.append("3. Consistency check: identify contradictions and stale references")
-    lines.append("4. Incorporate new learnings from the current session")
-    lines.append(
-        "5. Rebalance: aim for the updated document to be no more than 70% "
-        "of the current token count while preserving all essential rules"
-    )
-    lines.append("6. Write the updated content back using the Write tool")
-    lines.append(f"7. Append a brief update note to {history_path}:")
-    lines.append(
-        '   - Format: "=== YYYY-MM-DD HH:MM:SS 形式の現在日時 ===\\n'
-        'Changes: {target file} — {brief summary}\\n\\n"'
-    )
+    lines.append("2. Create a backup: copy the selected file to <selected_file>.bak before making any changes")
+    lines.append("3. Read the selected file using the Read tool")
+
+    if append_mode:
+        lines.append("4. Append-only: do NOT rewrite, reorder, or delete any existing content")
+        lines.append("5. Do NOT run consistency checks, do NOT remove stale info, do NOT reduce token count")
+        lines.append("6. Write the appended content back using the Write tool")
+        lines.append("   - Keep additions SHORT and KEY-POINT-ONLY")
+        lines.append("   - Place the new entry in the most relevant existing section, or at the end if no section fits")
+        lines.append(f"7. Append a brief note to {history_path}:")
+        lines.append(
+            '   - Format: "=== YYYY-MM-DD HH:MM:SS 形式の現在日時 ===\\n'
+            'Appended: {target file} — {brief summary}\\n\\n"'
+        )
+    else:
+        lines.append("4. Consistency check: identify contradictions and stale references")
+        lines.append("5. Incorporate new learnings from the current session")
+        lines.append(
+            "6. Rebalance: aim for the updated document to be no more than 70% "
+            "of the current token count while preserving all essential rules"
+        )
+        lines.append("7. Write the updated content back using the Write tool")
+        lines.append(f"8. Append a brief update note to {history_path}:")
+        lines.append(
+            '   - Format: "=== YYYY-MM-DD HH:MM:SS 形式の現在日時 ===\\n'
+            'Changes: {target file} — {brief summary}\\n\\n"'
+        )
+
     lines.append("")
     lines.append("## Structural rules\n")
     lines.append("- Preserve existing section headers")
@@ -330,8 +357,11 @@ def detect_trigger(
             if DOC_SHORTHAND_APPEND_RE.search(prompt):
                 return "claude_append", explicit_path
             return "claude", explicit_path
-        if DOC_SHORTHAND_APPEND_RE.search(prompt) or DOC_SHORTHAND_ACTION_RE.search(prompt):
-            # 明示パスなし → cwd を渡して候補選択モードへ
+        if DOC_SHORTHAND_APPEND_RE.search(prompt):
+            # 明示パスなし・追記系 → 追記モードの候補選択へ
+            return "doc_smart_append", cwd
+        if DOC_SHORTHAND_ACTION_RE.search(prompt):
+            # 明示パスなし・更新系 → 更新モードの候補選択へ
             return "doc_smart", cwd
 
     return None
@@ -361,15 +391,17 @@ def main() -> int:
 
     trigger_kind, target_file = trigger
 
-    # doc_smart は特定ターゲットを持たない（target_file は cwd）。
+    # doc_smart / doc_smart_append は特定ターゲットを持たない（target_file は cwd）。
     # バックアップ・存在確認をスキップして候補列挙コンテキストを注入する。
-    if trigger_kind == "doc_smart":
+    # バックアップは Claude がターゲット確定後に自ら作成する（コンテキスト内に指示済み）。
+    if trigger_kind in ("doc_smart", "doc_smart_append"):
         history_path = get_history_path(target_file)  # target_file == cwd
         try:
             ensure_history_dir(history_path)
         except Exception as exc:
             log_error(f"Failed to create history directory for {history_path}: {exc}")
-        context_str = build_doc_smart_context(target_file, history_path)
+        append_mode = trigger_kind == "doc_smart_append"
+        context_str = build_doc_smart_context(target_file, history_path, append_mode=append_mode)
         result = {"additionalContext": context_str}
         json.dump(result, sys.stdout, ensure_ascii=False)
         return 0

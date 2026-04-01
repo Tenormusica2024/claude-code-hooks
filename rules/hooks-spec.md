@@ -53,16 +53,22 @@
 - `CLAUDE.md` ＋ 更新系アクション語 → cwd の CLAUDE.md を **70%縮小+整合性チェック付き** で更新
 - `CLAUDE.md` ＋ 追記系アクション語 → cwd の CLAUDE.md を **追記のみ** で更新
 - `マスタードキュメント` ＋ 書き込みアクション語 → master コンテキストで更新（quoted path があればそちらを優先）
-- `ドキュメントを更新して` 等の省略形 → cwd/CLAUDE.md または `rules/` 候補ファイルを Claude が選択
+- `ドキュメントを更新して` 等の省略形（quoted path なし） → `doc_smart`: 候補列挙 + Claude が選択 → 更新モード
+- `ドキュメントに追記して` 等の省略形（quoted path なし） → `doc_smart_append`: 候補列挙 + Claude が選択 → 追記モード
 
 **カスタムターゲットの指定:**
 - ✅ `"path/to/master.md" のマスタードキュメントを更新して`（ASCII引用符必須）
 - ❌ `path/to/master.md のマスタードキュメントを更新して`（引用符なし → 無視）
 
 **動作:**
-1. トリガー検出時、対象ファイルの `.bak` バックアップを作成
-2. `cwd/.claude/updates/doc_update_history.md` に更新履歴を集約
-3. `additionalContext` JSON を stdout に出力して Claude に更新手順を注入
+1. ターゲットが確定している場合（`claude` / `claude_append` / `master`）: フックがバックアップを作成
+2. ターゲット未確定の場合（`doc_smart` / `doc_smart_append`）: Claude がターゲット選択後にバックアップを自ら作成
+3. `cwd/.claude/updates/doc_update_history.md` に更新履歴を集約
+4. `additionalContext` JSON を stdout に出力して Claude に更新手順を注入
+
+**`doc_smart` / `doc_smart_append` の候補スキャン順:**
+1. `cwd/CLAUDE.md`（プロジェクト全体のインデックス・軽量ルール）
+2. `cwd/rules/*.md`（各ファイルの `<!-- 目的: ... -->` コメントを読んで説明を生成）
 
 ---
 
