@@ -1,13 +1,20 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import io
 import json
 import re
-import shutil
 import sys
-from datetime import datetime
 from pathlib import Path
+
+# hook_utils（同ディレクトリ）から共通ユーティリティを読み込む
+sys.path.insert(0, str(Path(__file__).parent))
+from hook_utils import (
+    backup_target_file,
+    configure_stdio,
+    ensure_history_dir,
+    load_payload,
+    log_error,
+)
 
 # 行数ウォーニング閾値（ブロックはせず情報として表示する）
 LINE_WARN_THRESHOLD = 150
@@ -18,68 +25,14 @@ GLOBAL_CLAUDE_MD = Path(r"C:\Users\Tenormusica\.claude\CLAUDE.md")
 
 # トリガー: 「グローバルCLAUDE.md」を含み、追記・更新・記載のいずれかを含むプロンプト
 # re.IGNORECASE は ASCII 部分（Claude/CLAUDE）にのみ効く。「グローバル」は大小無視対象外。
+# \s* で「グローバル CLAUDE.md」（空白入り）にも対応する
 GLOBAL_TRIGGER_RE = re.compile(
-    r"グローバル(?:Claude|CLAUDE)\.md",
+    r"グローバル\s*(?:Claude|CLAUDE)\.md",
     re.IGNORECASE,
 )
 APPEND_ACTION_RE = re.compile(
     r"(?:を更新して|に追記して|に記載して|に追加して)",
 )
-
-
-def configure_stdio() -> None:
-    if sys.platform == "win32":
-        sys.stdin = io.TextIOWrapper(
-            sys.stdin.buffer,
-            encoding="utf-8",
-            errors="replace",
-        )
-        sys.stdout = io.TextIOWrapper(
-            sys.stdout.buffer,
-            encoding="utf-8",
-            errors="replace",
-        )
-        sys.stderr = io.TextIOWrapper(
-            sys.stderr.buffer,
-            encoding="utf-8",
-            errors="replace",
-        )
-
-
-def log_error(message: str) -> None:
-    print(message, file=sys.stderr)
-
-
-def load_payload() -> dict[str, object] | None:
-    try:
-        raw = sys.stdin.read()
-        if not raw.strip():
-            return None
-        payload = json.loads(raw)
-        if not isinstance(payload, dict):
-            log_error("Hook input must be a JSON object.")
-            return None
-        return payload
-    except Exception as exc:
-        log_error(f"Failed to parse hook input JSON: {exc}")
-        return None
-
-
-def backup_target_file(target_file: Path) -> Path | None:
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    backup_path = target_file.with_name(
-        f"{target_file.name}.{timestamp}.bak"
-    ).resolve(strict=False)
-    try:
-        shutil.copy2(target_file, backup_path)
-        return backup_path
-    except Exception as exc:
-        log_error(f"Failed to create backup for {target_file}: {exc}")
-        return None
-
-
-def ensure_history_dir(history_path: Path) -> None:
-    history_path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def is_triggered(prompt: str) -> bool:

@@ -1,70 +1,48 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import io
 import json
 import re
-import shutil
 import sys
-from datetime import datetime
 from pathlib import Path
+
+# hook_utils（同ディレクトリ）から共通ユーティリティを読み込む
+sys.path.insert(0, str(Path(__file__).parent))
+from hook_utils import (
+    backup_target_file,
+    configure_stdio,
+    ensure_history_dir,
+    load_payload,
+    log_error,
+)
 
 # "CLAUDE.md" の大文字小文字バリアントすべてに一致させる
 CLAUDE_TRIGGER_RE = re.compile(r"CLAUDE\.md", re.IGNORECASE)
-# CLAUDE.md への書き込みアクション語。読み取り指示（「確認して」「読んで」等）では発火しない
+# CLAUDE.md への更新系アクション語（追記系は CLAUDE_APPEND_ACTION_RE で別管理）
+# 読み取り指示（「確認して」「読んで」等）では発火しない
 CLAUDE_ACTION_RE = re.compile(
+    r"(?:を更新して|に記載して|に反映して|を修正して)",
+)
+# CLAUDE.md への追記系アクション語。70% 縮小なしの追記専用コンテキストを注入する
+CLAUDE_APPEND_ACTION_RE = re.compile(r"(?:に追記して|に追加して)")
+# マスタードキュメントトリガーとアクション語（読み取り指示では発火しない）
+MASTER_TRIGGER_RE = re.compile(r"マスタードキュメント")
+MASTER_ACTION_RE = re.compile(
     r"(?:を更新して|に追記して|に記載して|に追加して|に反映して|を修正して)",
 )
-MASTER_TRIGGER_RE = re.compile(r"マスタードキュメント")
 QUOTED_MD_PATH_RE = re.compile(r"""["']([^"'\r\n]+?\.md)["']""", re.IGNORECASE)
 # 参照文脈の quoted path を除外するパターン。
 # 「'notes.md' を参考にマスタードキュメントを更新して」のように
 # quoted path が参照渡しで書かれたときに、誤ってそちらをターゲットにするのを防ぐ。
+# 日本語の語順: quoted_path が先、参照動詞が後（例: 'notes.md' を参考に）
 REFERENCE_QUOTED_PATH_RE = re.compile(
-    r"""(?:参考に|参照して|を参考|を読んで|を確認して|を見ながら)\s*["'][^"'\r\n]+?\.md["']""",
+    r"""["'][^"'\r\n]+?\.md["']\s*(?:を参考に|を参照して|を読んで|を確認して|を見ながら)""",
     re.IGNORECASE,
 )
 # グローバルCLAUDE.md 専用フック（global-claude-md-appender）が担当するプロンプトを除外する
+# \s* で「グローバル CLAUDE.md」（空白入り）にも対応する
 # これにより両フックが同時発火して cwd/CLAUDE.md へ70%縮小コンテキストが注入される問題を防ぐ
-GLOBAL_CLAUDE_GUARD_RE = re.compile(r"グローバル(?:Claude|CLAUDE)\.md", re.IGNORECASE)
-
-
-def configure_stdio() -> None:
-    if sys.platform == "win32":
-        sys.stdin = io.TextIOWrapper(
-            sys.stdin.buffer,
-            encoding="utf-8",
-            errors="replace",
-        )
-        sys.stdout = io.TextIOWrapper(
-            sys.stdout.buffer,
-            encoding="utf-8",
-            errors="replace",
-        )
-        sys.stderr = io.TextIOWrapper(
-            sys.stderr.buffer,
-            encoding="utf-8",
-            errors="replace",
-        )
-
-
-def log_error(message: str) -> None:
-    print(message, file=sys.stderr)
-
-
-def load_payload() -> dict[str, object] | None:
-    try:
-        raw = sys.stdin.read()
-        if not raw.strip():
-            return None
-        payload = json.loads(raw)
-        if not isinstance(payload, dict):
-            log_error("Hook input must be a JSON object.")
-            return None
-        return payload
-    except Exception as exc:
-        log_error(f"Failed to parse hook input JSON: {exc}")
-        return None
+GLOBAL_CLAUDE_GUARD_RE = re.compile(r"グローバル\s*(?:Claude|CLAUDE)\.md", re.IGNORECASE)
 
 
 def resolve_path(path_str: str, base_dir: Path | None = None) -> Path:
@@ -102,22 +80,6 @@ def get_history_path(cwd: Path) -> Path:
     return (
         cwd / ".claude" / "updates" / "doc_update_history.md"
     ).resolve(strict=False)
-
-
-def ensure_history_dir(history_path: Path) -> None:
-    history_path.parent.mkdir(parents=True, exist_ok=True)
-
-
-def backup_target_file(target_file: Path) -> Path | None:
-    # タイムスタンプ付きバックアップ名で上書きを防ぐ
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    backup_path = target_file.with_name(f"{target_file.name}.{timestamp}.bak").resolve(strict=False)
-    try:
-        shutil.copy2(target_file, backup_path)
-        return backup_path
-    except Exception as exc:
-        log_error(f"Failed to create backup for {target_file}: {exc}")
-        return None
 
 
 def build_missing_context(target_file: Path) -> str:
@@ -158,6 +120,38 @@ def build_claude_context(
         "- Do NOT add new sections unless clearly necessary\n"
         "- Keep the Meta section (rules for writing rules) intact\n"
         "- Merge duplicate rules rather than keeping both"
+    )
+
+
+def build_claude_append_context(
+    target_file: Path,
+    history_path: Path,
+    backup_path: Path | None,
+) -> str:
+    """追記専用コンテキスト。70% 縮小・整合性チェックは行わない。"""
+    backup_text = (
+        f"{backup_path} (use this for rollback if needed)"
+        if backup_path is not None
+        else "Backup could not be created; proceed carefully and do not rely on rollback."
+    )
+    return (
+        "[DOCUMENT APPEND TRIGGERED]\n"
+        "The user wants to append to CLAUDE.md. Perform the append now as part of your response.\n\n"
+        f"Target file: {target_file}\n"
+        f"Backup saved at: {backup_text}\n\n"
+        "Steps to perform:\n"
+        f"1. Read the current content of {target_file} using the Read tool\n"
+        "2. Append-only: do NOT rewrite, reorder, or delete any existing content\n"
+        "3. Do NOT run consistency checks, do NOT remove stale info, do NOT reduce token count\n"
+        f"4. Write the appended content back to {target_file} using the Write tool\n"
+        "   - Keep additions SHORT and KEY-POINT-ONLY\n"
+        "   - Place the new entry in the most relevant existing section, or at the end if no section fits\n"
+        f"5. Append a brief note to {history_path}:\n"
+        '   - Format: "=== YYYY-MM-DD HH:MM:SS 形式の現在日時 ===\\nAppended: {brief summary}\\n\\n"\n\n'
+        "Structural rules:\n"
+        "- Preserve existing section headers\n"
+        "- Do NOT add new sections unless clearly necessary\n"
+        "- Keep the Meta section (rules for writing rules) intact"
     )
 
 
@@ -202,9 +196,10 @@ def detect_trigger(
 
     # マスタードキュメントトリガーを CLAUDE.md トリガーより先に評価する。
     # 両方を含むプロンプトでも「マスタードキュメント」の意図が優先される。
-    if MASTER_TRIGGER_RE.search(prompt):
+    # MASTER_ACTION_RE を必須とし、読み取り指示（「確認して」等）では発火しない。
+    if MASTER_TRIGGER_RE.search(prompt) and MASTER_ACTION_RE.search(prompt):
         # extract_explicit_md_path は quoted path のみを受理し、
-        # 参照文脈の quoted path（「参考に 'notes.md'」等）は除外する。
+        # 参照文脈の quoted path（「'notes.md' を参考に〜」等）は除外する。
         explicit_path = extract_explicit_md_path(prompt, cwd)
         if explicit_path is not None:
             return "master", explicit_path
@@ -213,12 +208,18 @@ def detect_trigger(
 
     # CLAUDE.md が言及されていても、書き込みアクション語がなければ発火しない。
     # 「CLAUDE.md を確認して」「CLAUDE.md を読んで」等の参照指示は対象外。
-    if CLAUDE_TRIGGER_RE.search(prompt) and CLAUDE_ACTION_RE.search(prompt):
-        # quoted path（CLAUDE.md 以外）があればそちらをターゲットにする
-        explicit_path = extract_explicit_md_path(prompt, cwd)
-        if explicit_path is not None:
-            return "claude", explicit_path
-        return "claude", (cwd / "CLAUDE.md").resolve(strict=False)
+    if CLAUDE_TRIGGER_RE.search(prompt):
+        is_append = bool(CLAUDE_APPEND_ACTION_RE.search(prompt))
+        is_update = bool(CLAUDE_ACTION_RE.search(prompt))
+        if is_append or is_update:
+            # quoted path（CLAUDE.md 以外）があればそちらをターゲットにする
+            explicit_path = extract_explicit_md_path(prompt, cwd)
+            target = explicit_path if explicit_path is not None else (cwd / "CLAUDE.md").resolve(strict=False)
+            # 追記系（に追記して/に追加して）は70%縮小なしの追記専用コンテキスト
+            if is_append:
+                return "claude_append", target
+            # 更新系（を更新して/に記載して/に反映して/を修正して）は70%縮小コンテキスト
+            return "claude", target
 
     return None
 
@@ -247,17 +248,15 @@ def main() -> int:
 
     trigger_kind, target_file = trigger
 
-    # 存在確認は claude / master 両方の trigger_kind に対して共通で実行する。
+    # 存在確認は全 trigger_kind に対して共通で実行する。
     # この分岐でのみ早期リターンするため、以降の backup_target_file() や
     # ensure_history_dir() は target_file が存在する場合にしか到達しない。
     if not target_file.exists():
-        # claude / master 両方で不存在時は作成確認を促すだけ（副作用なし）
         result = {"additionalContext": build_missing_context(target_file)}
         json.dump(result, sys.stdout, ensure_ascii=False)
         return 0
 
     # ここに到達した時点でターゲットファイルの存在が保証されている。
-    # backup_target_file() と ensure_history_dir() はファイル存在後にのみ実行される。
     backup_path = backup_target_file(target_file)
 
     history_path = get_history_path(cwd)
@@ -268,6 +267,8 @@ def main() -> int:
 
     if trigger_kind == "claude":
         context_str = build_claude_context(target_file, history_path, backup_path)
+    elif trigger_kind == "claude_append":
+        context_str = build_claude_append_context(target_file, history_path, backup_path)
     else:
         context_str = build_master_context(target_file, history_path, backup_path)
 

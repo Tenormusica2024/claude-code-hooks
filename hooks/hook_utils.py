@@ -1,9 +1,68 @@
 # -*- coding: utf-8 -*-
-"""completion-hook / test-complete-hook 共通ユーティリティ。"""
+"""completion-hook / test-complete-hook / document-update-detector / global-claude-md-appender 共通ユーティリティ。"""
 from __future__ import annotations
 
+import io
 import json
 import re
+import shutil
+import sys
+from datetime import datetime
+from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# I/O・ファイルユーティリティ（document-update-detector / global-claude-md-appender 共用）
+# ---------------------------------------------------------------------------
+
+def configure_stdio() -> None:
+    """Windows 環境で stdin/stdout/stderr を UTF-8 に設定する。"""
+    if sys.platform == "win32":
+        sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
+
+def log_error(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
+def load_payload() -> dict[str, object] | None:
+    """stdin から JSON ペイロードを読み込む。失敗時は None を返す。"""
+    try:
+        raw = sys.stdin.read()
+        if not raw.strip():
+            return None
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            log_error("Hook input must be a JSON object.")
+            return None
+        return payload
+    except Exception as exc:
+        log_error(f"Failed to parse hook input JSON: {exc}")
+        return None
+
+
+def backup_target_file(target_file: Path) -> Path | None:
+    """タイムスタンプ付きバックアップを作成する。失敗時は None を返す。"""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    backup_path = target_file.with_name(f"{target_file.name}.{timestamp}.bak").resolve(strict=False)
+    try:
+        shutil.copy2(target_file, backup_path)
+        return backup_path
+    except Exception as exc:
+        log_error(f"Failed to create backup for {target_file}: {exc}")
+        return None
+
+
+def ensure_history_dir(history_path: Path) -> None:
+    """履歴ファイルの親ディレクトリを作成する。"""
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# テストフレームワーク検出ユーティリティ（completion-hook / test-complete-hook 共用）
+# ---------------------------------------------------------------------------
 
 
 _MUTATION_TOOL_NAMES = {"Edit", "Write", "MultiEdit"}

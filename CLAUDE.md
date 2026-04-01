@@ -60,8 +60,10 @@ Claude Code品質ガードレール用 Stop hooks のリポジトリ。
 ユーザーの発言にドキュメント更新トリガーを検出し、Claudeにadditionalcontextを注入してドキュメント更新を自動化する。
 
 **トリガーワード:**
-- `Claude.md` / `CLAUDE.md` ＋ 書き込みアクション語（を更新して/に追記して/に記載して/に追加して/に反映して/を修正して） → cwdのCLAUDE.mdを更新（読み取り指示のみでは発火しない）
-- `マスタードキュメント` → master コンテキスト（プロジェクト進捗更新）で cwd/CLAUDE.md を更新。プロンプト内に別の明示パス（ASCII引用符で囲んだ .md パス・CLAUDE.md 以外）があればそちらを優先
+- `Claude.md` / `CLAUDE.md` ＋ 更新系アクション語（を更新して/に記載して/に反映して/を修正して） → cwdのCLAUDE.mdを **70%縮小+整合性チェック付き** で更新
+- `Claude.md` / `CLAUDE.md` ＋ 追記系アクション語（に追記して/に追加して） → cwdのCLAUDE.mdを **追記のみ**（縮小・整合性チェックなし）で更新
+- （いずれも読み取り指示のみでは発火しない）
+- `マスタードキュメント` ＋ 書き込みアクション語（を更新して/に追記して/に記載して/に追加して/に反映して/を修正して）→ master コンテキスト（プロジェクト進捗更新）で cwd/CLAUDE.md を更新。プロンプト内に別の明示パス（ASCII引用符で囲んだ .md パス・CLAUDE.md 以外）があればそちらを優先。読み取り指示のみでは発火しない
 
 **カスタムターゲットの指定方法（CLAUDE.md・マスタードキュメント 共通）:**
 - ✅ `"path/to/master.md" のマスタードキュメントを更新して`（ASCII引用符必須）
@@ -76,13 +78,15 @@ Claude Code品質ガードレール用 Stop hooks のリポジトリ。
 
 **優先順位:** 両方のトリガーワードを含むプロンプトでは、`マスタードキュメント` を優先して評価する
 
+**共通ユーティリティ:** `hook_utils.py` の I/O セクション（`configure_stdio` / `log_error` / `load_payload` / `backup_target_file` / `ensure_history_dir`）を両フックで共有する
+
 ---
 
 ### global-claude-md-appender.py（UserPromptSubmit hook）
 
 ユーザーの発言にグローバル CLAUDE.md への追記トリガーを検出し、追記専用の additionalContext を注入する。
 
-**トリガーワード:** `グローバルCLAUDE.md`（または `グローバルClaude.md`）＋以下のいずれか
+**トリガーワード:** `グローバルCLAUDE.md`（または `グローバルClaude.md`、空白入り `グローバル CLAUDE.md` も対応）＋以下のいずれか
 - `を更新して`
 - `に追記して`
 - `に記載して`
