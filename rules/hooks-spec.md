@@ -70,6 +70,10 @@
 1. `cwd/CLAUDE.md`（プロジェクト全体のインデックス・軽量ルール）
 2. `cwd/rules/*.md`（各ファイルの `<!-- 目的: ... -->` コメントを読んで説明を生成）
 
+**`doc_smart` 更新モードの圧縮ルール:**
+- `CLAUDE.md` が選択された場合のみ 70% トークン縮小を適用
+- `rules/*.md` が選択された場合は縮小なし（整合性チェック・陳腐化修正のみ）
+
 ---
 
 ## global-claude-md-appender.py（UserPromptSubmit hook）
