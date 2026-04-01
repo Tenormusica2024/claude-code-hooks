@@ -11,6 +11,10 @@ from pathlib import Path
 
 # "CLAUDE.md" の大文字小文字バリアントすべてに一致させる
 CLAUDE_TRIGGER_RE = re.compile(r"CLAUDE\.md", re.IGNORECASE)
+# CLAUDE.md への書き込みアクション語。読み取り指示（「確認して」「読んで」等）では発火しない
+CLAUDE_ACTION_RE = re.compile(
+    r"(?:を更新して|に追記して|に記載して|に追加して|に反映して|を修正して)",
+)
 MASTER_TRIGGER_RE = re.compile(r"マスタードキュメント")
 QUOTED_MD_PATH_RE = re.compile(r"""["']([^"'\r\n]+?\.md)["']""", re.IGNORECASE)
 # グローバルCLAUDE.md 専用フック（global-claude-md-appender）が担当するプロンプトを除外する
@@ -198,7 +202,9 @@ def detect_trigger(
         # デフォルト: 「マスタードキュメント」= cwd の CLAUDE.md（プロジェクト最上位ルール）
         return "claude", (cwd / "CLAUDE.md").resolve(strict=False)
 
-    if CLAUDE_TRIGGER_RE.search(prompt):
+    # CLAUDE.md が言及されていても、書き込みアクション語がなければ発火しない。
+    # 「CLAUDE.md を確認して」「CLAUDE.md を読んで」等の参照指示は対象外。
+    if CLAUDE_TRIGGER_RE.search(prompt) and CLAUDE_ACTION_RE.search(prompt):
         return "claude", (cwd / "CLAUDE.md").resolve(strict=False)
 
     return None

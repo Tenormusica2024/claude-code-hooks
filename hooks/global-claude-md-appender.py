@@ -23,7 +23,7 @@ GLOBAL_TRIGGER_RE = re.compile(
     re.IGNORECASE,
 )
 APPEND_ACTION_RE = re.compile(
-    r"(?:を更新して|に追記して|に記載して)",
+    r"(?:を更新して|に追記して|に記載して|に追加して)",
 )
 
 
