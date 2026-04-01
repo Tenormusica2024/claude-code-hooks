@@ -7,12 +7,8 @@ import os
 import re
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
-
-
-DEFAULT_MASTER_DOC_PATH = (
-    r"D:\antigravity_projects\VaultD\Projects\project-progress-master.md"
-)
 # "CLAUDE.md" の大文字小文字バリアントすべてに一致させる
 CLAUDE_TRIGGER_RE = re.compile(r"CLAUDE\.md", re.IGNORECASE)
 MASTER_TRIGGER_RE = re.compile(r"マスタードキュメント")
@@ -94,7 +90,9 @@ def ensure_history_dir(history_path: Path) -> None:
 
 
 def backup_target_file(target_file: Path) -> Path | None:
-    backup_path = target_file.with_name(target_file.name + ".bak").resolve(strict=False)
+    # タイムスタンプ付きバックアップ名で上書きを防ぐ
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = target_file.with_name(f"{target_file.name}.{timestamp}.bak").resolve(strict=False)
     try:
         shutil.copy2(target_file, backup_path)
         return backup_path
@@ -135,7 +133,7 @@ def build_claude_context(
         "5. Rebalance: aim for the updated document to be no more than 70% of the current token count while preserving all essential rules\n"
         f"6. Write the updated content back to {target_file} using the Write tool\n"
         f"7. Compute a diff summary and append it to {history_path}:\n"
-        '   - Format: "=== {datetime} ===\\nChanges: {brief summary of what changed}\\n\\n"\n\n'
+        '   - Format: "=== YYYY-MM-DD HH:MM:SS 形式の現在日時 ===\\nChanges: {brief summary of what changed}\\n\\n"\n\n'
         "Structural rules for CLAUDE.md update:\n"
         "- Preserve existing section headers\n"
         "- Do NOT add new sections unless clearly necessary\n"
@@ -168,7 +166,7 @@ def build_master_context(
         "6. Preserve the document's existing format, section structure, and conventions exactly\n"
         f"7. Write the updated content back to {target_file} using the Write tool\n"
         f"8. Append a brief update note to {history_path}:\n"
-        '   - Format: "=== {datetime} ===\\nChanges: {brief summary}\\n\\n"\n\n'
+        '   - Format: "=== YYYY-MM-DD HH:MM:SS 形式の現在日時 ===\\nChanges: {brief summary}\\n\\n"\n\n'
         "Important: Do NOT change the document format. Only update content within the existing structure."
     )
 
@@ -182,11 +180,12 @@ def detect_trigger(
 
     if MASTER_TRIGGER_RE.search(prompt):
         explicit_path = extract_explicit_md_path(prompt, cwd)
-        if explicit_path is not None:
+        # CLAUDE.md という名前の明示パスはコンテキスト参照として除外する。
+        # それ以外の明示パスが指定された場合（別のマスタードキュメント）はそちらを優先する。
+        if explicit_path is not None and explicit_path.name.upper() != "CLAUDE.MD":
             return "master", explicit_path
-
-        master_doc_path = os.environ.get("MASTER_DOC_PATH", DEFAULT_MASTER_DOC_PATH)
-        return "master", resolve_path(master_doc_path, cwd)
+        # デフォルト: 「マスタードキュメント」= cwd の CLAUDE.md（プロジェクト最上位ルール）
+        return "claude", (cwd / "CLAUDE.md").resolve(strict=False)
 
     return None
 
