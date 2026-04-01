@@ -160,6 +160,99 @@ def build_claude_append_context(
     )
 
 
+def extract_purpose_comment(md_file: Path) -> str:
+    """ファイル先頭の <!-- 目的: ... --> コメントを読み取って返す。
+    コメントが見つからない場合はファイル名（拡張子なし）を返す。"""
+    try:
+        # 先頭512バイトのみ読んでパフォーマンスを確保する
+        with md_file.open(encoding="utf-8", errors="replace") as f:
+            head = f.read(512)
+        m = re.search(r"<!--\s*目的:\s*(.+?)\s*-->", head)
+        if m:
+            return m.group(1).strip()
+    except OSError:
+        pass
+    return md_file.stem
+
+
+def scan_doc_candidates(cwd: Path) -> list[tuple[str, Path]]:
+    """更新候補となる .md ファイルを列挙し (目的説明, パス) のリストを返す。
+
+    優先順序:
+      1. cwd/CLAUDE.md（プロジェクトルートのインデックス）
+      2. cwd/rules/*.md（rules/ 配下の詳細仕様ファイル）
+    """
+    candidates: list[tuple[str, Path]] = []
+
+    claude_md = (cwd / "CLAUDE.md").resolve(strict=False)
+    if claude_md.exists():
+        candidates.append(("プロジェクト全体のインデックス・軽量ルール", claude_md))
+
+    rules_dir = cwd / "rules"
+    if rules_dir.is_dir():
+        for md_file in sorted(rules_dir.glob("*.md")):
+            if md_file.is_file():
+                purpose = extract_purpose_comment(md_file)
+                candidates.append((purpose, md_file))
+
+    return candidates
+
+
+def build_doc_smart_context(cwd: Path, history_path: Path) -> str:
+    """「ドキュメントを更新して」省略形用コンテキスト。
+
+    候補ファイルを列挙して Claude に適切なターゲットを選ばせ、
+    選択後に通常の更新手順（claude コンテキスト相当）を実行させる。
+    バックアップは Claude がターゲットを確定した後に自己判断で行う。
+    """
+    candidates = scan_doc_candidates(cwd)
+
+    if not candidates:
+        # 候補が見つからない場合は CLAUDE.md 作成を提案する
+        return (
+            "[DOCUMENT UPDATE TRIGGERED]\n"
+            f"No markdown documents found in {cwd}. "
+            "Should I create a CLAUDE.md in this directory?\n\n"
+            "Only ask the user for confirmation. Do not create any files until confirmed."
+        )
+
+    lines = ["[DOCUMENT UPDATE TRIGGERED]"]
+    lines.append(
+        "The user said 'ドキュメントを更新して' without specifying a target file. "
+        "Select the most appropriate document from the candidates below based on "
+        "what was discussed in the current session, then perform the update.\n"
+    )
+    lines.append("## Candidate documents\n")
+    for i, (purpose, path) in enumerate(candidates, start=1):
+        lines.append(f"{i}. {path}  — {purpose}")
+    lines.append("")
+    lines.append("## Steps to perform\n")
+    lines.append(
+        "1. Decide which document best matches the current session context "
+        "(prefer a specific rules/ file over CLAUDE.md when the change is narrow in scope)"
+    )
+    lines.append("2. Read the selected file using the Read tool")
+    lines.append("3. Consistency check: identify contradictions and stale references")
+    lines.append("4. Incorporate new learnings from the current session")
+    lines.append(
+        "5. Rebalance: aim for the updated document to be no more than 70% "
+        "of the current token count while preserving all essential rules"
+    )
+    lines.append("6. Write the updated content back using the Write tool")
+    lines.append(f"7. Append a brief update note to {history_path}:")
+    lines.append(
+        '   - Format: "=== YYYY-MM-DD HH:MM:SS 形式の現在日時 ===\\n'
+        'Changes: {target file} — {brief summary}\\n\\n"'
+    )
+    lines.append("")
+    lines.append("## Structural rules\n")
+    lines.append("- Preserve existing section headers")
+    lines.append("- Do NOT add new sections unless clearly necessary")
+    lines.append("- Merge duplicate rules rather than keeping both")
+
+    return "\n".join(lines)
+
+
 def build_master_context(
     target_file: Path,
     history_path: Path,
@@ -226,16 +319,20 @@ def detect_trigger(
             # 更新系（を更新して/に記載して/に反映して/を修正して）は70%縮小コンテキスト
             return "claude", target
 
-    # 「ドキュメントを更新して」省略形 → cwd/CLAUDE.md を対象。
+    # 「ドキュメントを更新して」省略形 → 候補ファイルを列挙して Claude に選ばせる（doc_smart）。
+    # quoted path があればそちらをターゲットに確定して通常モードで処理する。
     # マスタードキュメント・グローバルCLAUDE.md のガードはここより上で早期リターン済み。
     # 観察文（「ドキュメントの更新が必要」等）はアクション語にマッチしないため発火しない。
     if DOC_SHORTHAND_TRIGGER_RE.search(prompt):
         explicit_path = extract_explicit_md_path(prompt, cwd)
-        target = explicit_path if explicit_path is not None else (cwd / "CLAUDE.md").resolve(strict=False)
-        if DOC_SHORTHAND_APPEND_RE.search(prompt):
-            return "claude_append", target
-        if DOC_SHORTHAND_ACTION_RE.search(prompt):
-            return "claude", target
+        if explicit_path is not None:
+            # 明示パスがあれば通常の claude モードで処理（候補選択不要）
+            if DOC_SHORTHAND_APPEND_RE.search(prompt):
+                return "claude_append", explicit_path
+            return "claude", explicit_path
+        if DOC_SHORTHAND_APPEND_RE.search(prompt) or DOC_SHORTHAND_ACTION_RE.search(prompt):
+            # 明示パスなし → cwd を渡して候補選択モードへ
+            return "doc_smart", cwd
 
     return None
 
@@ -264,7 +361,20 @@ def main() -> int:
 
     trigger_kind, target_file = trigger
 
-    # 存在確認は全 trigger_kind に対して共通で実行する。
+    # doc_smart は特定ターゲットを持たない（target_file は cwd）。
+    # バックアップ・存在確認をスキップして候補列挙コンテキストを注入する。
+    if trigger_kind == "doc_smart":
+        history_path = get_history_path(target_file)  # target_file == cwd
+        try:
+            ensure_history_dir(history_path)
+        except Exception as exc:
+            log_error(f"Failed to create history directory for {history_path}: {exc}")
+        context_str = build_doc_smart_context(target_file, history_path)
+        result = {"additionalContext": context_str}
+        json.dump(result, sys.stdout, ensure_ascii=False)
+        return 0
+
+    # 存在確認は doc_smart 以外の全 trigger_kind に対して共通で実行する。
     # この分岐でのみ早期リターンするため、以降の backup_target_file() や
     # ensure_history_dir() は target_file が存在する場合にしか到達しない。
     if not target_file.exists():
