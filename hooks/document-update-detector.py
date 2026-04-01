@@ -261,8 +261,10 @@ def build_doc_smart_context(
         lines.append("4. Consistency check: identify contradictions and stale references")
         lines.append("5. Incorporate new learnings from the current session")
         lines.append(
-            "6. Rebalance: aim for the updated document to be no more than 70% "
-            "of the current token count while preserving all essential rules"
+            "6. Rebalance (CLAUDE.md only): if the selected file is CLAUDE.md, "
+            "aim for no more than 70% of the current token count while preserving all essential rules. "
+            "For rules/*.md files, do NOT apply a token-count target — preserve content as-is and only "
+            "fix contradictions and stale references."
         )
         lines.append("7. Write the updated content back using the Write tool")
         lines.append(f"8. Append a brief update note to {history_path}:")
@@ -395,13 +397,16 @@ def main() -> int:
     # バックアップ・存在確認をスキップして候補列挙コンテキストを注入する。
     # バックアップは Claude がターゲット確定後に自ら作成する（コンテキスト内に指示済み）。
     if trigger_kind in ("doc_smart", "doc_smart_append"):
-        history_path = get_history_path(target_file)  # target_file == cwd
+        # doc_smart では target_file がプロジェクトルート (cwd) を指す。
+        # 他の trigger_kind と意味が異なるため cwd_path に別名を付けて可読性を確保する。
+        cwd_path = target_file
+        history_path = get_history_path(cwd_path)
         try:
             ensure_history_dir(history_path)
         except Exception as exc:
             log_error(f"Failed to create history directory for {history_path}: {exc}")
         append_mode = trigger_kind == "doc_smart_append"
-        context_str = build_doc_smart_context(target_file, history_path, append_mode=append_mode)
+        context_str = build_doc_smart_context(cwd_path, history_path, append_mode=append_mode)
         result = {"additionalContext": context_str}
         json.dump(result, sys.stdout, ensure_ascii=False)
         return 0
