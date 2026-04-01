@@ -17,6 +17,13 @@ CLAUDE_ACTION_RE = re.compile(
 )
 MASTER_TRIGGER_RE = re.compile(r"マスタードキュメント")
 QUOTED_MD_PATH_RE = re.compile(r"""["']([^"'\r\n]+?\.md)["']""", re.IGNORECASE)
+# 参照文脈の quoted path を除外するパターン。
+# 「'notes.md' を参考にマスタードキュメントを更新して」のように
+# quoted path が参照渡しで書かれたときに、誤ってそちらをターゲットにするのを防ぐ。
+REFERENCE_QUOTED_PATH_RE = re.compile(
+    r"""(?:参考に|参照して|を参考|を読んで|を確認して|を見ながら)\s*["'][^"'\r\n]+?\.md["']""",
+    re.IGNORECASE,
+)
 # グローバルCLAUDE.md 専用フック（global-claude-md-appender）が担当するプロンプトを除外する
 # これにより両フックが同時発火して cwd/CLAUDE.md へ70%縮小コンテキストが注入される問題を防ぐ
 GLOBAL_CLAUDE_GUARD_RE = re.compile(r"グローバル(?:Claude|CLAUDE)\.md", re.IGNORECASE)
@@ -67,18 +74,20 @@ def resolve_path(path_str: str, base_dir: Path | None = None) -> Path:
     return path.resolve(strict=False)
 
 
-def extract_master_doc_path(prompt: str, cwd: Path) -> Path | None:
-    """マスタードキュメントの更新対象として明示指定されたパスのみ返す。
+def extract_explicit_md_path(prompt: str, cwd: Path) -> Path | None:
+    """更新対象として明示指定された quoted path のみ返す。
 
     quoted path のみを受理し、unquoted の .md パスは無視する。
-    これにより「参考に notes.md も見て」のような参照パスを誤って
-    更新対象に取り込むバグを防ぐ。
+    さらに参照文脈（「'notes.md' を参考に〜」等）で渡された quoted path は
+    REFERENCE_QUOTED_PATH_RE で除外し、誤ってターゲットに採用するのを防ぐ。
 
-    カスタムマスタードキュメントを指定したい場合は必ずパスを引用符で囲む:
+    カスタムターゲットを指定したい場合は必ずパスを引用符で囲む:
       ✅ 「"path/to/master.md" のマスタードキュメントを更新して」
-      ❌  path/to/master.md のマスタードキュメントを更新して（参照扱いになる）
+      ❌  「'notes.md' を参考にマスタードキュメントを更新して」（参照扱いで除外）
     """
-    quoted_match = QUOTED_MD_PATH_RE.search(prompt)
+    # 参照文脈の quoted path をプロンプトから除いてから探索する
+    cleaned = REFERENCE_QUOTED_PATH_RE.sub("", prompt)
+    quoted_match = QUOTED_MD_PATH_RE.search(cleaned)
     if quoted_match:
         path = resolve_path(quoted_match.group(1), cwd)
         # CLAUDE.md はコンテキスト参照として除外（デフォルトパスに委ねる）
@@ -194,17 +203,21 @@ def detect_trigger(
     # マスタードキュメントトリガーを CLAUDE.md トリガーより先に評価する。
     # 両方を含むプロンプトでも「マスタードキュメント」の意図が優先される。
     if MASTER_TRIGGER_RE.search(prompt):
-        # extract_master_doc_path は quoted path のみを受理し、
-        # 「参考に notes.md も見て」のような参照パスは無視する（extract_explicit_md_path との違い）。
-        explicit_path = extract_master_doc_path(prompt, cwd)
+        # extract_explicit_md_path は quoted path のみを受理し、
+        # 参照文脈の quoted path（「参考に 'notes.md'」等）は除外する。
+        explicit_path = extract_explicit_md_path(prompt, cwd)
         if explicit_path is not None:
             return "master", explicit_path
-        # デフォルト: 「マスタードキュメント」= cwd の CLAUDE.md（プロジェクト最上位ルール）
-        return "claude", (cwd / "CLAUDE.md").resolve(strict=False)
+        # デフォルト: 「マスタードキュメント」→ master コンテキスト（進捗更新向け）で cwd/CLAUDE.md を対象
+        return "master", (cwd / "CLAUDE.md").resolve(strict=False)
 
     # CLAUDE.md が言及されていても、書き込みアクション語がなければ発火しない。
     # 「CLAUDE.md を確認して」「CLAUDE.md を読んで」等の参照指示は対象外。
     if CLAUDE_TRIGGER_RE.search(prompt) and CLAUDE_ACTION_RE.search(prompt):
+        # quoted path（CLAUDE.md 以外）があればそちらをターゲットにする
+        explicit_path = extract_explicit_md_path(prompt, cwd)
+        if explicit_path is not None:
+            return "claude", explicit_path
         return "claude", (cwd / "CLAUDE.md").resolve(strict=False)
 
     return None

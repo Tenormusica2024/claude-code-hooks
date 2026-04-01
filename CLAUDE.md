@@ -60,12 +60,14 @@ Claude Code品質ガードレール用 Stop hooks のリポジトリ。
 ユーザーの発言にドキュメント更新トリガーを検出し、Claudeにadditionalcontextを注入してドキュメント更新を自動化する。
 
 **トリガーワード:**
-- `Claude.md` / `CLAUDE.md` → cwdのCLAUDE.mdを更新
-- `マスタードキュメント` → cwdのCLAUDE.md（プロジェクト最上位ルール）を更新。プロンプト内に別の明示パス（ASCII引用符で囲んだ .md パス・CLAUDE.md 以外）があればそちらを優先
+- `Claude.md` / `CLAUDE.md` ＋ 書き込みアクション語（を更新して/に追記して/に記載して/に追加して/に反映して/を修正して） → cwdのCLAUDE.mdを更新（読み取り指示のみでは発火しない）
+- `マスタードキュメント` → master コンテキスト（プロジェクト進捗更新）で cwd/CLAUDE.md を更新。プロンプト内に別の明示パス（ASCII引用符で囲んだ .md パス・CLAUDE.md 以外）があればそちらを優先
 
-**カスタムマスタードキュメントの指定方法:**
+**カスタムターゲットの指定方法（CLAUDE.md・マスタードキュメント 共通）:**
 - ✅ `"path/to/master.md" のマスタードキュメントを更新して`（ASCII引用符必須）
-- ❌ `path/to/master.md のマスタードキュメントを更新して`（参照と区別できないため無視される）
+- ✅ `"path/to/other.md" にCLAUDE.mdの内容を移植して`（CLAUDE.md トリガーでも quoted path が効く）
+- ❌ `path/to/master.md のマスタードキュメントを更新して`（引用符なし → 無視）
+- ❌ `'notes.md' を参考にマスタードキュメントを更新して`（参照文脈の quoted path → 無視）
 
 **動作:**
 1. トリガー検出時、対象ファイルの `.bak` バックアップを作成（タイムスタンプ+マイクロ秒で一意化）
@@ -84,6 +86,7 @@ Claude Code品質ガードレール用 Stop hooks のリポジトリ。
 - `を更新して`
 - `に追記して`
 - `に記載して`
+- `に追加して`
 
 **対象ファイル:** `C:\Users\Tenormusica\.claude\CLAUDE.md`（固定・引数なし）
 
