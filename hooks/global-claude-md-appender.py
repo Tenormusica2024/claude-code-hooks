@@ -9,6 +9,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# 行数ウォーニング閾値（ブロックはせず情報として表示する）
+LINE_WARN_THRESHOLD = 150
+LINE_STRONG_WARN_THRESHOLD = 200
+
 # グローバル CLAUDE.md の固定パス
 GLOBAL_CLAUDE_MD = Path(r"C:\Users\Tenormusica\.claude\CLAUDE.md")
 
@@ -87,31 +91,72 @@ def is_triggered(prompt: str) -> bool:
     return bool(GLOBAL_TRIGGER_RE.search(prompt) and APPEND_ACTION_RE.search(prompt))
 
 
+def count_lines(file: Path) -> int:
+    """ファイルの行数を返す。読み取り失敗時は 0 を返す。"""
+    try:
+        return len(file.read_text(encoding="utf-8", errors="replace").splitlines())
+    except Exception:
+        return 0
+
+
+def build_line_count_notice(current_lines: int) -> str:
+    """現在行数に応じた通知テキストを返す（ブロックなし・情報提供のみ）。"""
+    if current_lines >= LINE_STRONG_WARN_THRESHOLD:
+        return (
+            f"Current line count: {current_lines} lines"
+            f" ⚠️  OVER {LINE_STRONG_WARN_THRESHOLD} LINES —"
+            " global CLAUDE.md is large. Strongly prefer external file references over inline content."
+        )
+    if current_lines >= LINE_WARN_THRESHOLD:
+        return (
+            f"Current line count: {current_lines} lines"
+            f" ⚠️  Approaching recommended limit ({LINE_WARN_THRESHOLD}~{LINE_STRONG_WARN_THRESHOLD} lines)."
+            " Prefer 'Detail: [path]' references instead of inline content where possible."
+        )
+    return f"Current line count: {current_lines} lines"
+
+
 def build_append_context(
     target_file: Path,
     history_path: Path,
     backup_path: Path | None,
+    current_lines: int,
 ) -> str:
     backup_text = (
         f"{backup_path} (use this for rollback if needed)"
         if backup_path is not None
         else "Backup could not be created; proceed carefully and do not rely on rollback."
     )
+    line_count_notice = build_line_count_notice(current_lines)
     return (
         "[GLOBAL CLAUDE.MD APPEND TRIGGERED]\n"
         "The user wants to append to the global CLAUDE.md. Perform the append now as part of your response.\n\n"
         f"Target file: {target_file}\n"
-        f"Backup saved at: {backup_text}\n\n"
+        f"Backup saved at: {backup_text}\n"
+        f"{line_count_notice}\n\n"
+        "=== QUALITY CHECKLIST (verify mentally before writing) ===\n"
+        "1. 「これがなかったらClaudeは間違えるか？」— If NO, skip or use external file reference\n"
+        "2. 「詳細は外部ファイルに分けられるか？」— If YES, write only '詳細: `path/to/file.md`' inline\n"
+        "3. 「既存のルールと重複・矛盾していないか？」— If duplicate, merge instead of adding\n"
+        "4. 「10語以内で要点が言えるか？」— If NO, trim to bullet points\n\n"
+        "=== RECOMMENDED FORMAT ===\n"
+        "Good (short key-point):\n"
+        "  ## Section header\n"
+        "  - Rule stated in 10 words or less\n\n"
+        "Good (external reference for details):\n"
+        "  詳細: `C:\\path\\to\\detail-file.md`\n\n"
+        "Avoid: long paragraphs, step-by-step instructions, project-specific details inline\n\n"
         "Steps to perform:\n"
         f"1. Read the current content of {target_file} using the Read tool\n"
-        "2. Determine what to append based on the user's request in the current session\n"
+        "2. Apply the quality checklist above before deciding what to add\n"
         "3. Append-only: do NOT rewrite, reorder, or delete any existing content\n"
         "4. Do NOT run consistency checks, do NOT remove stale info, do NOT reduce token count\n"
-        "5. Write the appended content back to {target_file} using the Write tool\n"
+        f"5. Write the appended content back to {target_file} using the Write tool\n"
         "   - Keep additions SHORT and KEY-POINT-ONLY (なるべく短く要点のみで言語化する)\n"
         "   - Place the new entry in the most relevant existing section, or at the end if no section fits\n"
         f"6. Append a brief note to {history_path}:\n"
-        '   - Format: "=== YYYY-MM-DD HH:MM:SS ===\\nAppended: {{brief summary of what was added}}\\n\\n"\n\n'
+        '   - Format: "=== YYYY-MM-DD HH:MM:SS ===\\nAppended: {{brief summary of what was added}}\\n\\n"\n'
+        f"7. Report the final line count after appending (current before append: {current_lines})\n\n"
         "Constraints:\n"
         "- This is the GLOBAL Claude instructions file — any change is permanent and affects ALL sessions\n"
         "- Confirm with the user before writing if the scope of the append is ambiguous\n"
@@ -156,7 +201,8 @@ def main() -> int:
     except Exception as exc:
         log_error(f"Failed to create history directory for {history_path}: {exc}")
 
-    context_str = build_append_context(target_file, history_path, backup_path)
+    current_lines = count_lines(target_file)
+    context_str = build_append_context(target_file, history_path, backup_path, current_lines)
     result = {"additionalContext": context_str}
     json.dump(result, sys.stdout, ensure_ascii=False)
     return 0

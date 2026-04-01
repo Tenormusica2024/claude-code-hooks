@@ -65,6 +65,7 @@ def resolve_path(path_str: str, base_dir: Path | None = None) -> Path:
 
 
 def extract_explicit_md_path(prompt: str, cwd: Path) -> Path | None:
+    """プロンプト内の任意の .md パスを抽出する（CLAUDE.md 更新トリガー用）。"""
     quoted_match = QUOTED_MD_PATH_RE.search(prompt)
     if quoted_match:
         return resolve_path(quoted_match.group(1), cwd)
@@ -73,6 +74,26 @@ def extract_explicit_md_path(prompt: str, cwd: Path) -> Path | None:
     if unquoted_match:
         return resolve_path(unquoted_match.group(1), cwd)
 
+    return None
+
+
+def extract_master_doc_path(prompt: str, cwd: Path) -> Path | None:
+    """マスタードキュメントの更新対象として明示指定されたパスのみ返す。
+
+    quoted path のみを受理し、unquoted の .md パスは無視する。
+    これにより「参考に notes.md も見て」のような参照パスを誤って
+    更新対象に取り込むバグを防ぐ。
+
+    カスタムマスタードキュメントを指定したい場合は必ずパスを引用符で囲む:
+      ✅ 「"path/to/master.md" のマスタードキュメントを更新して」
+      ❌  path/to/master.md のマスタードキュメントを更新して（参照扱いになる）
+    """
+    quoted_match = QUOTED_MD_PATH_RE.search(prompt)
+    if quoted_match:
+        path = resolve_path(quoted_match.group(1), cwd)
+        # CLAUDE.md はコンテキスト参照として除外（デフォルトパスに委ねる）
+        if path.name.upper() != "CLAUDE.MD":
+            return path
     return None
 
 
@@ -174,14 +195,13 @@ def detect_trigger(
     prompt: str,
     cwd: Path,
 ) -> tuple[str, Path] | None:
-    # マスタードキュメントトリガーを先に評価する。
-    # CLAUDE.md への言及がプロンプトにあっても「コンテキスト参照」として扱い、
-    # 更新対象の選択には影響させない。
+    # マスタードキュメントトリガーを CLAUDE.md トリガーより先に評価する。
+    # 両方を含むプロンプトでも「マスタードキュメント」の意図が優先される。
     if MASTER_TRIGGER_RE.search(prompt):
-        explicit_path = extract_explicit_md_path(prompt, cwd)
-        # CLAUDE.md という名前の明示パスはコンテキスト参照として除外する。
-        # それ以外の明示パスが指定された場合（別のマスタードキュメント）はそちらを優先する。
-        if explicit_path is not None and explicit_path.name.upper() != "CLAUDE.MD":
+        # extract_master_doc_path は quoted path のみを受理し、
+        # 「参考に notes.md も見て」のような参照パスは無視する（extract_explicit_md_path との違い）。
+        explicit_path = extract_master_doc_path(prompt, cwd)
+        if explicit_path is not None:
             return "master", explicit_path
         # デフォルト: 「マスタードキュメント」= cwd の CLAUDE.md（プロジェクト最上位ルール）
         return "claude", (cwd / "CLAUDE.md").resolve(strict=False)
@@ -216,13 +236,17 @@ def main() -> int:
 
     trigger_kind, target_file = trigger
 
+    # 存在確認は claude / master 両方の trigger_kind に対して共通で実行する。
+    # この分岐でのみ早期リターンするため、以降の backup_target_file() や
+    # ensure_history_dir() は target_file が存在する場合にしか到達しない。
     if not target_file.exists():
         # claude / master 両方で不存在時は作成確認を促すだけ（副作用なし）
         result = {"additionalContext": build_missing_context(target_file)}
         json.dump(result, sys.stdout, ensure_ascii=False)
         return 0
 
-    # ターゲットが存在する場合のみバックアップと履歴ディレクトリを確保する
+    # ここに到達した時点でターゲットファイルの存在が保証されている。
+    # backup_target_file() と ensure_history_dir() はファイル存在後にのみ実行される。
     backup_path = backup_target_file(target_file)
 
     history_path = get_history_path(cwd)
