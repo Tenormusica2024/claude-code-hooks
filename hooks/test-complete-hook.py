@@ -26,7 +26,7 @@ from hook_utils import (  # noqa: E402
 
 
 TRIGGER_THRESHOLD = 6
-PENDING_ISSUES_PATH = Path(r"C:\Users\Tenormusica\.claude\hooks\pending_issues.json")
+PENDING_ISSUES_PATH = Path.home() / ".claude" / "hooks" / "pending_issues.json"
 
 # テストの説明・議論文脈を検出してスコアを下げるパターン
 _TEST_EXPLANATION_PATTERNS = [
@@ -177,10 +177,10 @@ def score_test_complete_turn(hook_input: dict, transcript_path: str) -> tuple[in
         score += 3
         reasons.append("+3 MCP test tool used")
 
-    # Bashツール自体の使用
+    # Bashツール自体の使用（弱証拠。テスト無関係な Bash でも加点されるため +1 に抑制）
     if bool(scan.get("has_bash")):
-        score += 2
-        reasons.append("+2 Bash tool used")
+        score += 1
+        reasons.append("+1 Bash tool used")
 
     # ツール出力に失敗パターンがあれば大きく減点
     if _contains_failure_output(combined_all_text):

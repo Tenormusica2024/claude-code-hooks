@@ -1,5 +1,5 @@
 # install.ps1 - claude-code-hooks インストールスクリプト
-# ~/.claude/hooks/ へhookファイルをコピーし、settings.jsonにエントリを追加する
+# ~/.claude/hooks/ へhookファイルをコピーし、未登録フックを案内する（settings.json は自動書き換えしない）
 
 $ErrorActionPreference = "Stop"
 $HooksDir = "$env:USERPROFILE\.claude\hooks"
@@ -12,10 +12,21 @@ if (-not (Test-Path $HooksDir)) {
     New-Item -ItemType Directory -Path $HooksDir | Out-Null
 }
 
-$hooks = @(
+# Stop hooks
+$stopHooks = @(
     "test-delegation-detector.py",
-    "claude-md-auto-recorder.py"
+    "claude-md-auto-recorder.py",
+    "completion-hook.py",
+    "test-complete-hook.py"
 )
+
+# UserPromptSubmit hooks（hooks.Stop ではなく hooks.UserPromptSubmit に登録が必要）
+$userPromptHooks = @(
+    "document-update-detector.py",
+    "global-claude-md-appender.py"
+)
+
+$hooks = $stopHooks + $userPromptHooks
 
 foreach ($hook in $hooks) {
     $src = Join-Path $SourceDir $hook
@@ -29,25 +40,37 @@ Write-Host "Checking settings.json ..."
 
 if (-not (Test-Path $SettingsFile)) {
     Write-Host "  settings.json not found. Skipping auto-patch."
-    Write-Host "  Manually add the following to your settings.json Stop hooks:"
-    foreach ($hook in $hooks) {
+    Write-Host "  Manually add Stop hooks to settings.json:"
+    foreach ($hook in $stopHooks) {
+        Write-Host "    python `"$HooksDir\$hook`""
+    }
+    Write-Host "  Manually add UserPromptSubmit hooks to settings.json:"
+    foreach ($hook in $userPromptHooks) {
         Write-Host "    python `"$HooksDir\$hook`""
     }
     exit 0
 }
 
 $settings = Get-Content $SettingsFile -Raw | ConvertFrom-Json
+$settingsText = $settings | ConvertTo-Json -Depth 20
 
 $alreadyRegistered = @()
-$notRegistered = @()
+$notRegisteredStop = @()
+$notRegisteredUserPrompt = @()
 
-foreach ($hook in $hooks) {
-    $hookPath = "$HooksDir\$hook" -replace "\\", "\\\\"
-    $settingsText = $settings | ConvertTo-Json -Depth 20
+foreach ($hook in $stopHooks) {
     if ($settingsText -match [regex]::Escape($hook)) {
         $alreadyRegistered += $hook
     } else {
-        $notRegistered += $hook
+        $notRegisteredStop += $hook
+    }
+}
+
+foreach ($hook in $userPromptHooks) {
+    if ($settingsText -match [regex]::Escape($hook)) {
+        $alreadyRegistered += $hook
+    } else {
+        $notRegisteredUserPrompt += $hook
     }
 }
 
@@ -55,15 +78,20 @@ if ($alreadyRegistered.Count -gt 0) {
     Write-Host "  Already registered: $($alreadyRegistered -join ', ')"
 }
 
-if ($notRegistered.Count -gt 0) {
+if ($notRegisteredStop.Count -gt 0) {
     Write-Host ""
-    Write-Host "The following hooks are NOT yet in settings.json Stop hooks:"
-    foreach ($hook in $notRegistered) {
+    Write-Host "Add to hooks.Stop in $SettingsFile :"
+    foreach ($hook in $notRegisteredStop) {
         Write-Host "  python `"$HooksDir\$hook`""
     }
+}
+
+if ($notRegisteredUserPrompt.Count -gt 0) {
     Write-Host ""
-    Write-Host "Add them manually to the Stop hooks section in:"
-    Write-Host "  $SettingsFile"
+    Write-Host "Add to hooks.UserPromptSubmit in $SettingsFile :"
+    foreach ($hook in $notRegisteredUserPrompt) {
+        Write-Host "  python `"$HooksDir\$hook`""
+    }
 }
 
 Write-Host ""
