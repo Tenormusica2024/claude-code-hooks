@@ -15,6 +15,26 @@ Claude Code の品質ガードレール用 Stop hooks。
 
 **除外:** 管理者権限・ログイン認証・2FAが必要な場合
 
+**スマートテストディスパッチ:** block時にCWDのプロジェクト種別を自動判定し、最適なテストスキルのパスをblockメッセージに注入する。Claudeがそのスキルを読んで自律的にテストを実行する。
+
+```
+テスト丸投げ検出 → block
+        |
+  project_classifier.py でCWD解析
+        |
+   種別に応じてスキルパス注入
+   /        |          \          \
+tdd-guard  agent-test  e2e-auth  backend-test
+```
+
+| プロジェクト種別 | 検出シグナル | テストスキル |
+|-----------------|------------|------------|
+| フック/プラグイン | `hooks/`, `hook_utils`, `score=`, `block=` | `tdd-guard` |
+| AIエージェント | `openai`/`anthropic` import, `agent`, `.claude/` | `agent-test` |
+| Webアプリ | `playwright`/`cypress`, `auth`/`session`, `.spec.ts` | `e2e-auth-test` |
+| バックエンドAPI | `fastapi`/`django`/`flask`, `APIRouter`, `@app.route` | `backend-test` |
+| 汎用(フォールバック) | 上記以外 | `tdd-guard` |
+
 ---
 
 ### claude-md-auto-recorder.py
@@ -29,13 +49,41 @@ Claude Code の品質ガードレール用 Stop hooks。
 - 再利用可能な教訓 → 書く
 - 一回限りの細かい観察 → スキップ
 
+---
+
+### completion-hook.py
+実装完了宣言を検出し、テスト未実行の場合にblockしてテスト実行を強制する。
+スコアリング方式（v2）: `score >= 5` でblock。
+
+---
+
+### test-complete-hook.py
+テスト完了を検出し、`/ifr --d` レビューパイプラインを自動発動する。
+スコアリング方式（v2）: `score >= 6` でblock。
+
+## 補助モジュール
+
+### hooks/project_classifier.py
+CWDのファイル構造・依存パッケージ・importパターンからプロジェクト種別を判定するモジュール。
+`test-delegation-detector.py` から呼び出される。
+
+## テストスキル（`~/.claude/skills/` 配下）
+
+| スキル | 対象 |
+|--------|------|
+| `tdd-guard/SKILL.md` | pytest TDDガード + フック固有パターン |
+| `agent-test/SKILL.md` | LLM APIモック + promptfoo eval |
+| `e2e-auth-test/SKILL.md` | Playwright storageState認証 |
+| `backend-test/SKILL.md` | FastAPI/Django/Flask テストクライアント |
+
 ## インストール
 
 ```powershell
 .\install.ps1
 ```
 
-hookファイルを `~/.claude/hooks/` にコピーする。
+hookファイルとproject_classifierを `~/.claude/hooks/` にコピーする。
+テストスキルを `~/.claude/skills/` にコピーする。
 settings.jsonへの登録は手動で行う（以下を参照）。
 
 ## settings.json への登録
@@ -50,12 +98,19 @@ settings.jsonへの登録は手動で行う（以下を参照）。
 {
   "type": "command",
   "command": "python \"C:\\Users\\<USERNAME>\\.claude\\hooks\\claude-md-auto-recorder.py\""
+},
+{
+  "type": "command",
+  "command": "python \"C:\\Users\\<USERNAME>\\.claude\\hooks\\completion-hook.py\""
+},
+{
+  "type": "command",
+  "command": "python \"C:\\Users\\<USERNAME>\\.claude\\hooks\\test-complete-hook.py\""
 }
 ```
 
 ## テスト実行
 
 ```bash
-python tests/test_delegation_detector.py
-python tests/test_claude_md_recorder.py
+pytest tests/ -xvs
 ```

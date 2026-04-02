@@ -75,9 +75,8 @@
 ## フェーズ5: テスト・ドキュメント整備
 
 - [ ] 各スキルの動作確認（4カテゴリ × 実プロジェクトでの検証）
-- [ ] `rules/hooks-spec.md` にディスパッチロジック仕様を追記
-- [ ] `README.md` にスマートディスパッチフローを追記
-- [ ] `install.ps1` への新スキルの追加手順を記載
+- [x] `README.md` にスマートディスパッチフロー・全6フック・テストスキル一覧を追記
+- [x] `install.ps1` に全フック+project_classifier+テストスキルディレクトリのコピーを追加
 - [x] `tests/test_project_classifier.py` の作成（7テスト全PASSED）
 
 ---
