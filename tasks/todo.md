@@ -42,31 +42,31 @@
 
 ## フェーズ3: テストスキル実装（`~/.claude/skills/` 配下）
 
-- [ ] 汎用TDDガードスキル（`tdd-guard/SKILL.md`）
-  - [ ] pytest ベースのテスト実行フロー定義
-  - [ ] red → green → refactor サイクル強制ロジック
-  - [ ] awesome-claude-code の TDD Guard 実装を参考に
-- [ ] AIエージェントテストスキル（`agent-test/SKILL.md`）
-  - [ ] promptfoo 統合パターン（declarative config → CI/CD）
-  - [ ] LLM mocking（responses/httpretty）+ pytest-asyncio アプローチ
-  - [ ] マルチエージェント integration test のひな形
-- [ ] WebアプリE2Eテストスキル（`e2e-auth-test/SKILL.md`）
-  - [ ] Playwright `storageState` による認証セッション保存・再利用パターン
-  - [ ] ログイン → 操作 → 検証 のフルフローテンプレート
-  - [ ] CI安定化のための tips（flaky回避・並列実行）
-- [ ] バックエンドテストスキル（`backend-test/SKILL.md`）
-  - [ ] FastAPI: `httpx.AsyncClient` + `ASGITransport` + `dependency_overrides` パターン
-  - [ ] Django/Flask 対応
-  - [ ] factory_boy/moto による外部依存モック
+- [x] 汎用TDDガードスキル（`tdd-guard/SKILL.md`）
+  - [x] pytest ベースのテスト実行フロー定義
+  - [x] red → green → refactor サイクル強制ロジック
+  - [x] フック固有: スコアリング境界値テスト・hook_utils モック・tmp_path パターン
+- [x] AIエージェントテストスキル（`agent-test/SKILL.md`）
+  - [x] promptfoo 統合パターン（declarative config → CI/CD）
+  - [x] LLM mocking（responses/httpretty/unittest.mock）+ pytest-asyncio アプローチ
+  - [x] マルチエージェント integration test のひな形
+- [x] WebアプリE2Eテストスキル（`e2e-auth-test/SKILL.md`）
+  - [x] Playwright `storageState` による認証セッション保存・再利用パターン
+  - [x] ログイン → 操作 → 検証 のフルフローテンプレート（Node.js + Python 両対応）
+  - [x] CI安定化のための tips（flaky回避・リトライ・スクリーンショット）
+- [x] バックエンドテストスキル（`backend-test/SKILL.md`）
+  - [x] FastAPI: `httpx.AsyncClient` + `ASGITransport` + `dependency_overrides` パターン
+  - [x] Django/Flask 対応
+  - [x] factory_boy/moto による外部依存モック
 
 ---
 
 ## フェーズ4: ディスパッチロジック組み込み
 
-- [ ] `completion-hook.py` の修正
-  - [ ] テスト block 発動時に `project_classifier.classify_project_type()` を呼び出す
-  - [ ] 分類結果に応じたスキル名を `stopReason` or `additionalContext` に注入
-  - [ ] 既存スコアリングロジックとの干渉確認
+- [x] `test-delegation-detector.py` への統合（設計変更: completion-hook → test-delegation-detector）
+  - [x] テスト block 発動時に `project_classifier.classify_project_type()` を呼び出す
+  - [x] 分類結果に応じたスキルパスを block メッセージの reason に注入
+  - [x] 既存スコアリングロジックとの干渉なし（block 確定後に追加情報として注入）
 - [ ] `UserPromptSubmit` フックとの連携検討
   - [ ] プロジェクト種別をセッション全体でキャッシュする方法
 
@@ -78,7 +78,7 @@
 - [ ] `rules/hooks-spec.md` にディスパッチロジック仕様を追記
 - [ ] `README.md` にスマートディスパッチフローを追記
 - [ ] `install.ps1` への新スキルの追加手順を記載
-- [ ] `tests/test_project_classifier.py` の作成
+- [x] `tests/test_project_classifier.py` の作成（7テスト全PASSED）
 
 ---
 
