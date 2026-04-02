@@ -16,14 +16,14 @@ Claude Code の品質ガードレール用 Stop / UserPromptSubmit hooks。
 
 ## 収録フック
 
-| フック | 種別 | 機能 |
-|--------|------|------|
-| `test-delegation-detector.py` | Stop | 「試してみてください」等のテスト委譲を block |
-| `claude-md-auto-recorder.py` | Stop | 確認委譲を block、Claude 自身が記録/スキップを判断 |
-| `completion-hook.py` | Stop | 実装完了宣言を検出しテスト実行を強制（スコア >= 5） |
-| `test-complete-hook.py` | Stop | テスト完了を検出し `/ifr --d` を自動発動（スコア >= 6） |
-| `document-update-detector.py` | UserPromptSubmit | ドキュメント更新トリガーを検出し additionalContext を注入 |
-| `global-claude-md-appender.py` | UserPromptSubmit | グローバル CLAUDE.md への追記トリガーを検出 |
+| フック | 種別 | 機能 | テスト |
+|--------|------|------|--------|
+| `test-delegation-detector.py` | Stop | 「試してみてください」等のテスト委譲を block | ✓ |
+| `claude-md-auto-recorder.py` | Stop | 確認委譲を block、Claude 自身が記録/スキップを判断 | ✓ |
+| `completion-hook.py` | Stop | 実装完了宣言を検出しテスト実行を強制（スコア >= 5） | 手動 |
+| `test-complete-hook.py` | Stop | テスト完了を検出し `/ifr --d` を自動発動（スコア >= 6） | 手動 |
+| `document-update-detector.py` | UserPromptSubmit | ドキュメント更新トリガーを検出し additionalContext を注入 | 手動 |
+| `global-claude-md-appender.py` | UserPromptSubmit | グローバル CLAUDE.md への追記トリガーを検出 | 手動 |
 
 スコアリング方式・トリガーワードの詳細: [`rules/hooks-spec.md`](rules/hooks-spec.md)
 
@@ -102,6 +102,21 @@ settings.json への登録は手動で行う（各ユーザーの既存設定を
   }
 }
 ```
+
+## アーキテクチャ
+
+```
+hooks/
+├── hook_utils.py              # 共通ユーティリティ（UTF-8 I/O・ペイロード解析・スコアリング基盤）
+├── test-delegation-detector.py
+├── claude-md-auto-recorder.py
+├── completion-hook.py
+├── test-complete-hook.py
+├── document-update-detector.py
+└── global-claude-md-appender.py
+```
+
+`hook_utils.py` は全フックが共有するライブラリ。Windows の stdin/stdout UTF-8 設定・Claude Code からのペイロード解析・スコアリングロジックの共通基盤を提供する。
 
 ## テスト実行
 
