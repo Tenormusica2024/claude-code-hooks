@@ -65,12 +65,35 @@ CWD の以下の情報から種別シグナルを抽出する:
 
 ## ディスパッチ実装方針
 
-### 修正対象: `completion-hook.py`
+### 修正対象: `test-delegation-detector.py`（completion-hookではない）
 
-新規フックを追加するのではなく、**既存の `completion-hook.py` へ拡張**を選択する。
+新規フックを追加するのではなく、**既存の `test-delegation-detector.py` へ拡張**を選択する。
 
-- 理由: テスト実行強制のトリガーは completion-hook の責務であり、種別判定はその延長
-- `project_classifier.py` を `hooks/` 配下に新規作成し、completion-hook から呼び出す
+- 理由: 「丸投げ検出の直後にスキルを提示する」のが最も意図的に自然なタイミング
+- completion-hookは「実装完了検出」の責務を保ったまま変更しない
+- `project_classifier.py` を `hooks/` 配下に新規作成し、test-delegation-detector から呼び出す
+
+### スキル発動メカニズム
+
+blockメッセージ（または `additionalContext`）にスキルファイルのフルパスを注入する。
+Claude がそのパスを読んで自律的に SKILL.md に従い実行する。
+
+```python
+# blockメッセージ内のスキルパス注入例
+skill_paths = classify_and_get_skills(cwd)
+skill_hint = "\n".join(f"- {p}" for p in skill_paths)
+block_message += f"\n\n適切なテストスキル:\n{skill_hint}"
+```
+
+### 同数シグナル時の挙動
+
+複数種別のシグナル数が同数の場合、**全スキルパスを注入**する。
+Claude が順次適用するため、スキル間の優先順位テーブルは不要。
+
+### ファイルスキャン方式
+
+毎回ステートレスにスキャンする（セッション間キャッシュなし）。
+hook 発火ごとのファイル読込コストは無視できるレベルのため。
 
 ### スキル格納場所
 
