@@ -1,5 +1,7 @@
 # claude-code-hooks
 
+<!-- このファイルはプロジェクト全体の軽量インデックスです。利用者は README.md を入口に読んでください。 -->
+
 Claude Code 品質ガードレール用 Stop / UserPromptSubmit hooks のリポジトリ。
 
 ## 実装済みフック
