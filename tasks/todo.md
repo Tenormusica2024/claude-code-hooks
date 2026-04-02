@@ -74,7 +74,11 @@
 
 ## フェーズ5: テスト・ドキュメント整備
 
-- [ ] 各スキルの動作確認（4カテゴリ × 実プロジェクトでの検証）
+- [x] 各スキルの動作確認（4カテゴリ × 実プロジェクトでの検証）
+  - [x] claude-code-hooks → フック/プラグイン → tdd-guard
+  - [x] ai_news_agent → AIエージェント(+Webアプリ同数) → agent-test + e2e-auth-test
+  - [x] cafe_site → 汎用(静的サイトでシグナルなし) → tdd-guard
+  - [x] ai-model-tracker-api → バックエンドAPI → backend-test
 - [x] `README.md` にスマートディスパッチフロー・全6フック・テストスキル一覧を追記
 - [x] `install.ps1` に全フック+project_classifier+テストスキルディレクトリのコピーを追加
 - [x] `tests/test_project_classifier.py` の作成（7テスト全PASSED）
