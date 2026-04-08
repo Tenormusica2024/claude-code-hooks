@@ -21,7 +21,7 @@ Claude がテスト丸投げ発言
           ↓
 [test-delegation-detector] → project_classifier でプロジェクト種別を判定
           ↓
-     種別に応じてスキル名を additionalContext に注入
+     種別に応じてスキル名を blockメッセージに注入
     ↙         ↓          ↘         ↘
 tdd-guard  agent-test  e2e-auth-test  backend-test
 （汎用）   （AIエージェント）（Webアプリ）    （バックエンド）
