@@ -26,7 +26,7 @@ from hook_utils import (  # noqa: E402
 
 
 TRIGGER_THRESHOLD = 6
-PENDING_ISSUES_PATH = Path(r"C:\Users\Tenormusica\.claude\hooks\pending_issues.json")
+PENDING_ISSUES_PATH = Path.home() / ".claude" / "hooks" / "pending_issues.json"
 
 # テストの説明・議論文脈を検出してスコアを下げるパターン
 _TEST_EXPLANATION_PATTERNS = [

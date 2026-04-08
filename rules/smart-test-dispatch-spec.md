@@ -19,12 +19,12 @@ Claude がテスト丸投げ発言
           ↓
 [test-delegation-detector] 検出・block
           ↓
-[completion-hook] → project_classifier でプロジェクト種別を判定
+[test-delegation-detector] → project_classifier でプロジェクト種別を判定
           ↓
      種別に応じてスキル名を additionalContext に注入
     ↙         ↓          ↘         ↘
-tdd-guard  agent-test  e2e-auth   backend-test
-（汎用）   （AIエージェント）（Webアプリ）（バックエンド）
+tdd-guard  agent-test  e2e-auth-test  backend-test
+（汎用）   （AIエージェント）（Webアプリ）    （バックエンド）
 ```
 
 スキルは 1 つに固定せず、エージェントが CWD のシグナルを読んで分岐する。
@@ -98,7 +98,7 @@ hook 発火ごとのファイル読込コストは無視できるレベルのた
 ### スキル格納場所
 
 - スキルファイル本体は `~/.claude/skills/` 配下に配置（Claude Code が読み込む標準パス）
-- このリポジトリには各スキルの **仕様テンプレート**（`skills-spec/` ディレクトリ）を管理
+- スキルの仕様は `~/.claude/skills/` 配下の各 `SKILL.md` で管理
 
 ---
 
