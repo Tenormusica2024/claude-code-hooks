@@ -1,5 +1,9 @@
 # claude-code-hooks
 
+[![test](https://github.com/Tenormusica2024/claude-code-hooks/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/Tenormusica2024/claude-code-hooks/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+
 Claude Code の品質ガードレール用 Stop hooks。
 ユーザーへの確認委譲を検出してblockし、Claude自身に自己修正させる。
 
