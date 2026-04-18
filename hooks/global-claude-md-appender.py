@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import json
 import re
 import sys
 from pathlib import Path
@@ -11,9 +10,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 from hook_utils import (
     backup_target_file,
     configure_stdio,
+    emit_additional_context,
     ensure_history_dir,
+    format_backup_text,
     load_payload,
     log_error,
+    parse_bool_flag,
 )
 
 # 行数ウォーニング閾値（ブロックはせず情報として表示する）
@@ -23,21 +25,22 @@ LINE_STRONG_WARN_THRESHOLD = 200
 # グローバル CLAUDE.md の固定パス（ユーザーホーム配下の ~/.claude/CLAUDE.md）
 GLOBAL_CLAUDE_MD = Path.home() / ".claude" / "CLAUDE.md"
 
-# トリガー: 「グローバルCLAUDE.md」を含み、追記・更新・記載のいずれかを含むプロンプト
+# トリガー: 「グローバルCLAUDE.md」を含み、更新/追記系アクション（を更新して・に追記して・に記載して・に追加して）のいずれかを含むプロンプト
 # re.IGNORECASE は ASCII 部分（Claude/CLAUDE）にのみ効く。「グローバル」は大小無視対象外。
 # \s* で「グローバル CLAUDE.md」（空白入り）にも対応する
 GLOBAL_TRIGGER_RE = re.compile(
     r"グローバル\s*(?:Claude|CLAUDE)\.md",
     re.IGNORECASE,
 )
-APPEND_ACTION_RE = re.compile(
+# 更新/追記系アクション語。語彙上は「追記」だけでなく「更新」「記載」「追加」も受理する
+WRITE_ACTION_RE = re.compile(
     r"(?:を更新して|に追記して|に記載して|に追加して)",
 )
 
 
 def is_triggered(prompt: str) -> bool:
-    """「グローバルCLAUDE.md」＋追記アクションの両方がある場合のみ発火する。"""
-    return bool(GLOBAL_TRIGGER_RE.search(prompt) and APPEND_ACTION_RE.search(prompt))
+    """「グローバルCLAUDE.md」＋更新/追記系アクションの両方がある場合のみ発火する。"""
+    return bool(GLOBAL_TRIGGER_RE.search(prompt) and WRITE_ACTION_RE.search(prompt))
 
 
 def count_lines(file: Path) -> int:
@@ -72,11 +75,7 @@ def build_append_context(
     backup_path: Path | None,
     current_lines: int,
 ) -> str:
-    backup_text = (
-        f"{backup_path} (use this for rollback if needed)"
-        if backup_path is not None
-        else "Backup could not be created; proceed carefully and do not rely on rollback."
-    )
+    backup_text = format_backup_text(backup_path)
     line_count_notice = build_line_count_notice(current_lines)
     return (
         "[GLOBAL CLAUDE.MD APPEND TRIGGERED]\n"
@@ -121,7 +120,7 @@ def main() -> int:
         return 0
 
     prompt = str(payload.get("prompt", ""))
-    stop_hook_active = bool(payload.get("stop_hook_active", False))
+    stop_hook_active = parse_bool_flag(payload.get("stop_hook_active"))
 
     if stop_hook_active:
         return 0
@@ -132,17 +131,28 @@ def main() -> int:
     target_file = GLOBAL_CLAUDE_MD
 
     if not target_file.exists():
-        result = {
-            "additionalContext": (
-                "[GLOBAL CLAUDE.MD APPEND TRIGGERED]\n"
-                f"{target_file} not found. Should I create it?\n\n"
-                "Only ask the user for confirmation. Do not create or modify any files until the user confirms."
-            )
-        }
-        json.dump(result, sys.stdout, ensure_ascii=False)
+        emit_additional_context(
+            "[GLOBAL CLAUDE.MD APPEND TRIGGERED]\n"
+            f"{target_file} not found. Should I create it?\n\n"
+            "Only ask the user for confirmation. Do not create or modify any files until the user confirms."
+        )
         return 0
 
     backup_path = backup_target_file(target_file)
+    if backup_path is None:
+        # 堅牢性優先: グローバルCLAUDE.md は全セッションに影響するため、
+        # バックアップ失敗時は append を中止して Claude に失敗報告だけさせる。
+        emit_additional_context(
+            "[GLOBAL CLAUDE.MD APPEND ABORTED — BACKUP FAILED]\n"
+            f"Target file: {target_file}\n\n"
+            "The backup copy could not be created (disk space, permissions, or I/O error).\n"
+            "To protect the global Claude instructions file from unrecoverable writes, this append has been aborted.\n\n"
+            "Do the following:\n"
+            "1. Do NOT modify the target file in this response\n"
+            "2. Inform the user that the backup failed and the append was aborted\n"
+            "3. Suggest the user check disk space / permissions, then retry the append request"
+        )
+        return 0
 
     # 履歴はグローバルCLAUDE.mdと同じディレクトリ内に集約する
     history_path = (target_file.parent / "updates" / "doc_update_history.md").resolve(strict=False)
@@ -153,8 +163,7 @@ def main() -> int:
 
     current_lines = count_lines(target_file)
     context_str = build_append_context(target_file, history_path, backup_path, current_lines)
-    result = {"additionalContext": context_str}
-    json.dump(result, sys.stdout, ensure_ascii=False)
+    emit_additional_context(context_str)
     return 0
 
 

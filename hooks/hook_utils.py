@@ -27,11 +27,21 @@ def log_error(message: str) -> None:
     print(message, file=sys.stderr)
 
 
-def load_payload() -> dict[str, object] | None:
-    """stdin から JSON ペイロードを読み込む。失敗時は None を返す。"""
+# stdin からの JSON ペイロード最大サイズ（約 2MB）。
+# 巨大な貼り付けや壊れた入力で同期 hook が固まるのを防ぐ。
+MAX_PAYLOAD_BYTES = 2 * 1024 * 1024
+
+
+def load_payload(max_bytes: int = MAX_PAYLOAD_BYTES) -> dict[str, object] | None:
+    """stdin から JSON ペイロードを読み込む。失敗時・サイズ超過時は None を返す。"""
     try:
-        raw = sys.stdin.read()
+        raw = sys.stdin.read(max_bytes + 1)
         if not raw.strip():
+            return None
+        if len(raw) > max_bytes:
+            log_error(
+                f"Hook input exceeds maximum size ({max_bytes} bytes); skipping hook for safety."
+            )
             return None
         payload = json.loads(raw)
         if not isinstance(payload, dict):
@@ -41,6 +51,82 @@ def load_payload() -> dict[str, object] | None:
     except Exception as exc:
         log_error(f"Failed to parse hook input JSON: {exc}")
         return None
+
+
+def parse_bool_flag(value: object, default: bool = False) -> bool:
+    """stop_hook_active 等の bool フラグを型ゆるく解釈する。
+
+    - bool はそのまま返す
+    - 文字列は "true"/"1"/"yes"/"on" を True、"false"/"0"/"no"/"off"/"" を False と解釈
+    - 数値は 0 を False、それ以外を True
+    - 上記に該当しない型・値は log_error して default を返す
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+        log_error(f"Unexpected bool flag string value: {value!r}; using default={default}.")
+        return default
+    log_error(f"Unexpected bool flag type: {type(value).__name__}; using default={default}.")
+    return default
+
+
+def resolve_path_safe(path_str: str, base_dir: Path | None = None) -> Path | None:
+    """パス文字列を安全に解決する。NUL バイト・不正入力は None を返す。
+
+    - 空文字列や None は None を返す
+    - Path() 構築や resolve() で ValueError / OSError が出た場合は None
+    - 相対パスは base_dir 基準で解決（base_dir が None なら cwd 基準にはしない）
+    """
+    if not path_str or not isinstance(path_str, str):
+        return None
+    try:
+        path = Path(path_str)
+        if not path.is_absolute() and base_dir is not None:
+            path = base_dir / path
+        return path.resolve(strict=False)
+    except (ValueError, OSError) as exc:
+        log_error(f"Failed to resolve path {path_str!r}: {exc}")
+        return None
+
+
+def parse_quoted_md_path(text: str) -> str | None:
+    """テキスト内で引用符対応にネストを検出しつつ .md パスを抽出する。
+
+    - 開始引用符と一致する終了引用符のみを受理する
+    - 引用内部に同種引用符が出現する（ネスト・不整合）場合は不正として None
+    - 複数候補があっても最初の "健全な" quoted .md パスを返す
+    - NUL バイトを含む場合は None
+    """
+    if not text or not isinstance(text, str):
+        return None
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch in ('"', "'"):
+            quote = ch
+            start = i + 1
+            end = text.find(quote, start)
+            if end == -1:
+                return None
+            inner = text[start:end]
+            # 改行・NULバイト・同種引用符が内部にあれば不正扱いで次の候補を探す
+            if "\n" in inner or "\r" in inner or "\x00" in inner or quote in inner:
+                i = end + 1
+                continue
+            if inner.lower().endswith(".md"):
+                return inner
+            i = end + 1
+        else:
+            i += 1
+    return None
 
 
 def backup_target_file(target_file: Path) -> Path | None:
@@ -53,6 +139,18 @@ def backup_target_file(target_file: Path) -> Path | None:
     except Exception as exc:
         log_error(f"Failed to create backup for {target_file}: {exc}")
         return None
+
+
+def format_backup_text(backup_path: Path | None) -> str:
+    """additionalContext に埋め込むバックアップ情報文字列を組み立てる。"""
+    if backup_path is not None:
+        return f"{backup_path} (use this for rollback if needed)"
+    return "Backup could not be created; proceed carefully and do not rely on rollback."
+
+
+def emit_additional_context(context_str: str) -> None:
+    """additionalContext を stdout に JSON 出力する。"""
+    json.dump({"additionalContext": context_str}, sys.stdout, ensure_ascii=False)
 
 
 def ensure_history_dir(history_path: Path) -> None:

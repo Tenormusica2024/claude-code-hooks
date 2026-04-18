@@ -69,17 +69,27 @@ tdd-guard  agent-test  e2e-auth-test  backend-test
 ---
 
 ### document-update-detector.py（UserPromptSubmit hook）
-「CLAUDE.mdを更新して」「マスタードキュメントを更新して」等の更新指示を検出し、対象ファイルをバックアップして追記コンテキストをClaudeに注入する。
+「CLAUDE.mdを更新して」「マスタードキュメントを更新して」等の更新指示を検出し、対象ファイルをバックアップしてから用途別の更新コンテキストをClaudeに注入する。
 
 **検出対象:**
 - `CLAUDE.md` / `マスタードキュメント` への言及
 - 引用パス (`"path/to/file.md"`) 形式の明示指定
 - 更新・追記・記載・追加等のアクション語
 
+**4つの注入モード（用途別にコンテキストが異なる）:**
+
+| モード | 発火プロンプト例 | 注入コンテキストの特徴 |
+|--------|-----------------|-----------------------|
+| `claude` | `CLAUDE.md を更新して` | 70% 縮小・整合性チェック・古い情報削除を要求する更新コンテキスト |
+| `claude_append` | `CLAUDE.md に追記して` | 追記専用。70% 縮小なし・既存内容の書き換え禁止 |
+| `master` | `マスタードキュメントを更新して` | 既存フォーマット厳守の進捗更新コンテキスト（プロジェクト進捗管理向け） |
+| `doc_smart` | `ドキュメントを更新して`（対象ファイル未指定） | 候補 `.md` を列挙して Claude に選ばせる。明示パス指定なしでも暴走しない |
+
 **挙動:**
-- 対象ファイルを `.bak` 接尾辞でバックアップ
+- 対象ファイルを `.bak` 接尾辞でバックアップ（`doc_smart` のみ Claude 側でバックアップを作る）
 - `additionalContext` に Append-only 制約・品質チェックリスト・履歴書き込み指示を埋め込む
 - `cwd` 欠損 / `stop_hook_active=true` では発火しない
+- 「グローバル CLAUDE.md」指定時は `global-claude-md-appender.py` に処理を譲る（二重発火ガード）
 
 ### global-claude-md-appender.py（UserPromptSubmit hook）
 グローバル CLAUDE.md (`~/.claude/CLAUDE.md`) 専用の肥大化ガード付き追記 hook。`Path.home()` ベースでマシン非依存。
