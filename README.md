@@ -4,8 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
-Claude Code の品質ガードレール用 Stop hooks。
+Claude Code の品質ガードレール用 Stop hooks / UserPromptSubmit hooks。
 ユーザーへの確認委譲を検出してblockし、Claude自身に自己修正させる。
+ドキュメント更新指示には追記コンテキストを注入する。
 
 ## 収録フック
 
@@ -65,6 +66,34 @@ tdd-guard  agent-test  e2e-auth-test  backend-test
 テスト完了を検出し、`/ifr --d` レビューパイプラインを自動発動する。
 スコアリング方式（v2）: `score >= 6` でblock。
 
+---
+
+### document-update-detector.py（UserPromptSubmit hook）
+「CLAUDE.mdを更新して」「マスタードキュメントを更新して」等の更新指示を検出し、対象ファイルをバックアップして追記コンテキストをClaudeに注入する。
+
+**検出対象:**
+- `CLAUDE.md` / `マスタードキュメント` への言及
+- 引用パス (`"path/to/file.md"`) 形式の明示指定
+- 更新・追記・記載・追加等のアクション語
+
+**挙動:**
+- 対象ファイルを `.bak` 接尾辞でバックアップ
+- `additionalContext` に Append-only 制約・品質チェックリスト・履歴書き込み指示を埋め込む
+- `cwd` 欠損 / `stop_hook_active=true` では発火しない
+
+### global-claude-md-appender.py（UserPromptSubmit hook）
+グローバル CLAUDE.md (`~/.claude/CLAUDE.md`) 専用の肥大化ガード付き追記 hook。`Path.home()` ベースでマシン非依存。
+
+**発火条件（AND）:**
+- 「グローバルCLAUDE.md」または「グローバル CLAUDE.md」
+- 「を更新して / に追記して / に記載して / に追加して」
+
+**肥大化ガード:**
+| 行数 | 警告レベル |
+|------|-----------|
+| 150行以上 | 推奨上限接近 → 外部ファイル参照優先 |
+| 200行以上 | 強警告 → インライン記載を避ける |
+
 ## 補助モジュール
 
 ### hooks/hook_utils.py
@@ -81,6 +110,8 @@ claude-code-hooks/
   hooks/                    # フック本体 + 補助モジュール
     claude-md-auto-recorder.py
     completion-hook.py
+    document-update-detector.py
+    global-claude-md-appender.py
     hook_utils.py
     project_classifier.py
     test-complete-hook.py
@@ -120,6 +151,10 @@ settings.jsonへの登録は手動で行う（以下を参照）。
 
 ## settings.json への登録
 
+`install.ps1` は settings.json を自動パッチしない。**手動登録が必須**（登録しないとhookは発火しない）。
+
+### Stop hooks
+
 `~/.claude/settings.json` の `hooks.Stop` に追加:
 
 ```json
@@ -140,6 +175,25 @@ settings.jsonへの登録は手動で行う（以下を参照）。
   "command": "python \"C:\\Users\\<USERNAME>\\.claude\\hooks\\test-complete-hook.py\""
 }
 ```
+
+### UserPromptSubmit hooks
+
+`~/.claude/settings.json` の `hooks.UserPromptSubmit` に追加:
+
+```json
+{
+  "type": "command",
+  "command": "python \"C:\\Users\\<USERNAME>\\.claude\\hooks\\document-update-detector.py\""
+},
+{
+  "type": "command",
+  "command": "python \"C:\\Users\\<USERNAME>\\.claude\\hooks\\global-claude-md-appender.py\""
+}
+```
+
+### 登録確認
+
+`install.ps1` は `hooks.UserPromptSubmit` 配下にhookファイル名が存在するかを個別にチェックし、登録漏れを表示する。登録後に再実行して確認すること。
 
 ## テスト実行
 
