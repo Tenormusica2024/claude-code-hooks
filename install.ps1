@@ -19,7 +19,9 @@ $hooks = @(
     "completion-hook.py",
     "test-complete-hook.py",
     "project_classifier.py",
-    "hook_utils.py"
+    "hook_utils.py",
+    "document-update-detector.py",
+    "global-claude-md-appender.py"
 )
 
 foreach ($hook in $hooks) {
@@ -104,6 +106,49 @@ if ($notRegistered.Count -gt 0) {
     }
     Write-Host ""
     Write-Host "Add them manually to the Stop hooks section in:"
+    Write-Host "  $SettingsFile"
+}
+
+# --- 4. settings.json の UserPromptSubmit hooks セクションを確認 ---
+Write-Host ""
+Write-Host "Checking UserPromptSubmit hooks in settings.json ..."
+
+$userPromptHooks = @(
+    "document-update-detector.py",
+    "global-claude-md-appender.py"
+)
+
+$upsAlreadyRegistered = @()
+$upsNotRegistered = @()
+
+foreach ($hook in $userPromptHooks) {
+    # UserPromptSubmit 配下を厳密に確認する
+    $registered = $false
+    if ($settings.hooks -and $settings.hooks.UserPromptSubmit) {
+        $upsText = $settings.hooks.UserPromptSubmit | ConvertTo-Json -Depth 20
+        if ($upsText -match [regex]::Escape($hook)) {
+            $registered = $true
+        }
+    }
+    if ($registered) {
+        $upsAlreadyRegistered += $hook
+    } else {
+        $upsNotRegistered += $hook
+    }
+}
+
+if ($upsAlreadyRegistered.Count -gt 0) {
+    Write-Host "  Already registered under hooks.UserPromptSubmit: $($upsAlreadyRegistered -join ', ')"
+}
+
+if ($upsNotRegistered.Count -gt 0) {
+    Write-Host ""
+    Write-Host "The following hooks are NOT yet in settings.json UserPromptSubmit hooks:"
+    foreach ($hook in $upsNotRegistered) {
+        Write-Host "  python `"$HooksDir\$hook`""
+    }
+    Write-Host ""
+    Write-Host "Add them manually to the UserPromptSubmit hooks section in:"
     Write-Host "  $SettingsFile"
 }
 

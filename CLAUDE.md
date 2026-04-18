@@ -1,6 +1,6 @@
 # claude-code-hooks
 
-Claude Code品質ガードレール用 Stop hooks のリポジトリ。
+Claude Code品質ガードレール用 Stop hooks / UserPromptSubmit hooks のリポジトリ。
 
 ## 実装済みフック
 
@@ -52,6 +52,33 @@ Claude Code品質ガードレール用 Stop hooks のリポジトリ。
 [test-complete-hook] → 要確認あり？ → STOP
                     → なし → /ifr --d 発動
 ```
+
+---
+
+### document-update-detector.py（UserPromptSubmit hook）
+「CLAUDE.mdを更新して」「マスタードキュメントを更新して」等の更新指示を検出し、対象ファイルをバックアップして追記コンテキストを注入する。
+
+**発火条件:**
+- プロンプトに `CLAUDE.md` / `マスタードキュメント` / 引用パス (`"path/to/file.md"`) のいずれか
+- かつ「更新」「追記」「記載」等のアクション語
+- `cwd` が存在し `stop_hook_active=false` のときのみ発火
+
+**挙動:**
+- 対象ファイルを `.bak` としてバックアップ
+- Claude へ「Append-only / 品質チェックリスト / 履歴書き込み」を含む `additionalContext` を返す
+
+### global-claude-md-appender.py（UserPromptSubmit hook）
+グローバル CLAUDE.md (`~/.claude/CLAUDE.md`) 専用の肥大化ガード付き追記 hook。
+
+**発火条件:**
+- プロンプトに「グローバルCLAUDE.md」または「グローバル CLAUDE.md」
+- かつ「を更新して / に追記して / に記載して / に追加して」
+
+**肥大化ガード:**
+- 150行以上: 外部ファイル参照推奨の警告
+- 200行以上: 強警告（インライン禁止推奨）
+
+**配置:** `~/.claude/CLAUDE.md` を `Path.home()` ベースで参照するためマシン非依存。
 
 ---
 
