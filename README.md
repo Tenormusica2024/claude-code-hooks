@@ -4,8 +4,24 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
+Stop hooks and UserPromptSubmit hooks for **Claude Code quality guardrails**.
+They block user-delegation, false completion, and low-signal workflow slips before they become bad habits in daily use.
+
+**Good fit for** teams or solo operators who want Claude Code to test, review, and document changes more autonomously instead of pushing that judgment back to the user.
+
+## What this repo covers
+
+- block “please test/verify it yourself” style user-delegation
+- block premature “done” messages when no real test evidence exists
+- auto-route Claude toward the right test skill for the current project shape
+- inject safer context when the user asks Claude to update docs such as `CLAUDE.md`
+
+---
+
+以下、日本語で詳細を説明します。
+
 Claude Code の品質ガードレール用 Stop hooks / UserPromptSubmit hooks。
-ユーザーへの確認委譲を検出してblockし、Claude自身に自己修正させる。
+ユーザーへの確認委譲を検出して block し、Claude 自身に自己修正させる。
 ドキュメント更新指示には追記コンテキストを注入する。
 
 ## 収録フック
