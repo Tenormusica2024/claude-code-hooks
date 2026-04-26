@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import json
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 # hook_utils（同ディレクトリ）から共通ユーティリティを読み込む
@@ -11,9 +11,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 from hook_utils import (
     backup_target_file,
     configure_stdio,
+    emit_additional_context,
     ensure_history_dir,
+    format_backup_text,
     load_payload,
     log_error,
+    parse_bool_flag,
+    parse_quoted_md_path,
+    resolve_path_safe,
 )
 
 # "CLAUDE.md" の大文字小文字バリアントすべてに一致させる
@@ -35,11 +40,12 @@ MASTER_ACTION_RE = re.compile(
 DOC_SHORTHAND_TRIGGER_RE = re.compile(r"ドキュメント(?!の更新が必要|を確認して|を読んで|を参照)")
 DOC_SHORTHAND_ACTION_RE = re.compile(r"(?:を更新して|に記載して|に反映して|を修正して)")
 DOC_SHORTHAND_APPEND_RE = re.compile(r"(?:に追記して|に追加して)")
-QUOTED_MD_PATH_RE = re.compile(r"""["']([^"'\r\n]+?\.md)["']""", re.IGNORECASE)
 # 参照文脈の quoted path を除外するパターン。
 # 「'notes.md' を参考にマスタードキュメントを更新して」のように
 # quoted path が参照渡しで書かれたときに、誤ってそちらをターゲットにするのを防ぐ。
 # 日本語の語順: quoted_path が先、参照動詞が後（例: 'notes.md' を参考に）
+# 引用符ネスト対策のため、抽出本体は parse_quoted_md_path() を使うが
+# 参照文脈の除去だけは正規表現で十分（プロンプト全体を削るため、多少緩くても問題ない）
 REFERENCE_QUOTED_PATH_RE = re.compile(
     r"""["'][^"'\r\n]+?\.md["']\s*(?:を参考に|を参照して|を読んで|を確認して|を見ながら)""",
     re.IGNORECASE,
@@ -50,19 +56,13 @@ REFERENCE_QUOTED_PATH_RE = re.compile(
 GLOBAL_CLAUDE_GUARD_RE = re.compile(r"グローバル\s*(?:Claude|CLAUDE)\.md", re.IGNORECASE)
 
 
-def resolve_path(path_str: str, base_dir: Path | None = None) -> Path:
-    path = Path(path_str)
-    if not path.is_absolute() and base_dir is not None:
-        path = base_dir / path
-    return path.resolve(strict=False)
-
-
 def extract_explicit_md_path(prompt: str, cwd: Path) -> Path | None:
     """更新対象として明示指定された quoted path のみ返す。
 
     quoted path のみを受理し、unquoted の .md パスは無視する。
     さらに参照文脈（「'notes.md' を参考に〜」等）で渡された quoted path は
     REFERENCE_QUOTED_PATH_RE で除外し、誤ってターゲットに採用するのを防ぐ。
+    引用符ネスト・NUL バイト・不正パスは parse_quoted_md_path / resolve_path_safe で安全にフォールバックする。
 
     カスタムターゲットを指定したい場合は必ずパスを引用符で囲む:
       ✅ 「"path/to/master.md" のマスタードキュメントを更新して」
@@ -70,13 +70,16 @@ def extract_explicit_md_path(prompt: str, cwd: Path) -> Path | None:
     """
     # 参照文脈の quoted path をプロンプトから除いてから探索する
     cleaned = REFERENCE_QUOTED_PATH_RE.sub("", prompt)
-    quoted_match = QUOTED_MD_PATH_RE.search(cleaned)
-    if quoted_match:
-        path = resolve_path(quoted_match.group(1), cwd)
-        # CLAUDE.md はコンテキスト参照として除外（デフォルトパスに委ねる）
-        if path.name.upper() != "CLAUDE.MD":
-            return path
-    return None
+    quoted_str = parse_quoted_md_path(cleaned)
+    if quoted_str is None:
+        return None
+    path = resolve_path_safe(quoted_str, cwd)
+    if path is None:
+        return None
+    # CLAUDE.md はコンテキスト参照として除外（デフォルトパスに委ねる）
+    if path.name.upper() == "CLAUDE.MD":
+        return None
+    return path
 
 
 def get_history_path(cwd: Path) -> Path:
@@ -96,16 +99,30 @@ def build_missing_context(target_file: Path) -> str:
     )
 
 
+def build_backup_failed_context(target_file: Path) -> str:
+    """バックアップ作成に失敗した場合、更新を中止してユーザーに通知させるコンテキスト。
+
+    堅牢性優先ポリシー: バックアップなしで更新を進めるとロールバック不能な書き換え事故が発生しうる。
+    このコンテキストを受けた Claude は target_file を一切変更せず、失敗をユーザーに報告するだけに留める。
+    """
+    return (
+        "[DOCUMENT UPDATE ABORTED — BACKUP FAILED]\n"
+        f"Target file: {target_file}\n\n"
+        "The backup copy for this file could not be created (likely due to disk space, permissions, or I/O error).\n"
+        "To protect against unrecoverable data loss, this update has been aborted.\n\n"
+        "Do the following:\n"
+        "1. Do NOT modify the target file in this response\n"
+        "2. Inform the user that the backup failed and the update was aborted\n"
+        "3. Suggest the user check disk space, file permissions, and directory access, then retry the update request"
+    )
+
+
 def build_claude_context(
     target_file: Path,
     history_path: Path,
     backup_path: Path | None,
 ) -> str:
-    backup_text = (
-        f"{backup_path} (use this for rollback if needed)"
-        if backup_path is not None
-        else "Backup could not be created; proceed carefully and do not rely on rollback."
-    )
+    backup_text = format_backup_text(backup_path)
     return (
         "[DOCUMENT UPDATE TRIGGERED]\n"
         "The user wants to update CLAUDE.md. Please perform this update now as part of your response.\n\n"
@@ -134,11 +151,7 @@ def build_claude_append_context(
     backup_path: Path | None,
 ) -> str:
     """追記専用コンテキスト。70% 縮小・整合性チェックは行わない。"""
-    backup_text = (
-        f"{backup_path} (use this for rollback if needed)"
-        if backup_path is not None
-        else "Backup could not be created; proceed carefully and do not rely on rollback."
-    )
+    backup_text = format_backup_text(backup_path)
     return (
         "[DOCUMENT APPEND TRIGGERED]\n"
         "The user wants to append to CLAUDE.md. Perform the append now as part of your response.\n\n"
@@ -287,11 +300,7 @@ def build_master_context(
     history_path: Path,
     backup_path: Path | None,
 ) -> str:
-    backup_text = (
-        f"{backup_path} (use this for rollback if needed)"
-        if backup_path is not None
-        else "Backup could not be created; proceed carefully and do not rely on rollback."
-    )
+    backup_text = format_backup_text(backup_path)
     return (
         "[DOCUMENT UPDATE TRIGGERED]\n"
         "The user wants to update the master progress document. Please perform this update now as part of your response.\n\n"
@@ -311,10 +320,29 @@ def build_master_context(
     )
 
 
+@dataclass(frozen=True)
+class TriggerDecision:
+    """検出結果を表す値オブジェクト。
+
+    - `claude` / `claude_append` / `master`: `target_file` は実ファイル（更新対象）
+    - `doc_smart` / `doc_smart_append`: `target_file` は未確定。`base_dir` に候補探索用の cwd を入れる
+
+    `target_file` と `base_dir` を分離することで、呼び出し側が「この Path は更新対象か探索ルートか」
+    を型と属性名から判別できる。以前は `tuple[str, Path]` で意味が文脈依存だった。
+    """
+    kind: str
+    target_file: Path | None = None
+    base_dir: Path | None = None
+
+    @property
+    def is_doc_smart(self) -> bool:
+        return self.kind in ("doc_smart", "doc_smart_append")
+
+
 def detect_trigger(
     prompt: str,
     cwd: Path,
-) -> tuple[str, Path] | None:
+) -> TriggerDecision | None:
     # グローバルCLAUDE.md を対象とする要求は global-claude-md-appender に委ねる。
     # CLAUDE_TRIGGER_RE はグローバル指定も誤検知するため、ここで早期リターンして
     # cwd/CLAUDE.md への 70% 縮小コンテキストが二重注入されるのを防ぐ。
@@ -329,9 +357,9 @@ def detect_trigger(
         # 参照文脈の quoted path（「'notes.md' を参考に〜」等）は除外する。
         explicit_path = extract_explicit_md_path(prompt, cwd)
         if explicit_path is not None:
-            return "master", explicit_path
+            return TriggerDecision(kind="master", target_file=explicit_path)
         # デフォルト: 「マスタードキュメント」→ master コンテキスト（進捗更新向け）で cwd/CLAUDE.md を対象
-        return "master", (cwd / "CLAUDE.md").resolve(strict=False)
+        return TriggerDecision(kind="master", target_file=(cwd / "CLAUDE.md").resolve(strict=False))
 
     # CLAUDE.md が言及されていても、書き込みアクション語がなければ発火しない。
     # 「CLAUDE.md を確認して」「CLAUDE.md を読んで」等の参照指示は対象外。
@@ -344,9 +372,9 @@ def detect_trigger(
             target = explicit_path if explicit_path is not None else (cwd / "CLAUDE.md").resolve(strict=False)
             # 追記系（に追記して/に追加して）は70%縮小なしの追記専用コンテキスト
             if is_append:
-                return "claude_append", target
+                return TriggerDecision(kind="claude_append", target_file=target)
             # 更新系（を更新して/に記載して/に反映して/を修正して）は70%縮小コンテキスト
-            return "claude", target
+            return TriggerDecision(kind="claude", target_file=target)
 
     # 「ドキュメントを更新して」省略形 → 候補ファイルを列挙して Claude に選ばせる（doc_smart）。
     # quoted path があればそちらをターゲットに確定して通常モードで処理する。
@@ -357,14 +385,14 @@ def detect_trigger(
         if explicit_path is not None:
             # 明示パスがあれば通常の claude モードで処理（候補選択不要）
             if DOC_SHORTHAND_APPEND_RE.search(prompt):
-                return "claude_append", explicit_path
-            return "claude", explicit_path
+                return TriggerDecision(kind="claude_append", target_file=explicit_path)
+            return TriggerDecision(kind="claude", target_file=explicit_path)
         if DOC_SHORTHAND_APPEND_RE.search(prompt):
-            # 明示パスなし・追記系 → 追記モードの候補選択へ
-            return "doc_smart_append", cwd
+            # 明示パスなし・追記系 → 追記モードの候補選択へ（実ファイルなし、探索ルートのみ）
+            return TriggerDecision(kind="doc_smart_append", base_dir=cwd)
         if DOC_SHORTHAND_ACTION_RE.search(prompt):
-            # 明示パスなし・更新系 → 更新モードの候補選択へ
-            return "doc_smart", cwd
+            # 明示パスなし・更新系 → 更新モードの候補選択へ（実ファイルなし、探索ルートのみ）
+            return TriggerDecision(kind="doc_smart", base_dir=cwd)
 
     return None
 
@@ -381,8 +409,12 @@ def main() -> int:
         # cwd が渡らない異常系では処理しない（os.getcwd() は意図しないパスになりうる）
         log_error("Hook input missing 'cwd'; skipping.")
         return 0
-    cwd = resolve_path(raw_cwd)
-    stop_hook_active = bool(payload.get("stop_hook_active", False))
+    cwd = resolve_path_safe(raw_cwd)
+    if cwd is None:
+        # NUL バイト・不正パス等で cwd を解決できない場合は安全にスキップ
+        log_error(f"Failed to resolve cwd {raw_cwd!r}; skipping.")
+        return 0
+    stop_hook_active = parse_bool_flag(payload.get("stop_hook_active"))
 
     if stop_hook_active:
         return 0
@@ -391,36 +423,43 @@ def main() -> int:
     if trigger is None:
         return 0
 
-    trigger_kind, target_file = trigger
-
-    # doc_smart / doc_smart_append は特定ターゲットを持たない（target_file は cwd）。
-    # バックアップ・存在確認をスキップして候補列挙コンテキストを注入する。
-    # バックアップは Claude がターゲット確定後に自ら作成する（コンテキスト内に指示済み）。
-    if trigger_kind in ("doc_smart", "doc_smart_append"):
-        # doc_smart では target_file がプロジェクトルート (cwd) を指す。
-        # 他の trigger_kind と意味が異なるため cwd_path に別名を付けて可読性を確保する。
-        cwd_path = target_file
-        history_path = get_history_path(cwd_path)
+    # doc_smart / doc_smart_append は実ターゲットが未確定。
+    # base_dir を起点に候補列挙コンテキストを注入する（バックアップは Claude 側で作成）。
+    if trigger.is_doc_smart:
+        base_dir = trigger.base_dir
+        if base_dir is None:
+            # TriggerDecision の不変条件違反。通常は発生しない。
+            log_error("doc_smart trigger without base_dir; skipping.")
+            return 0
+        history_path = get_history_path(base_dir)
         try:
             ensure_history_dir(history_path)
         except Exception as exc:
             log_error(f"Failed to create history directory for {history_path}: {exc}")
-        append_mode = trigger_kind == "doc_smart_append"
-        context_str = build_doc_smart_context(cwd_path, history_path, append_mode=append_mode)
-        result = {"additionalContext": context_str}
-        json.dump(result, sys.stdout, ensure_ascii=False)
+        append_mode = trigger.kind == "doc_smart_append"
+        context_str = build_doc_smart_context(base_dir, history_path, append_mode=append_mode)
+        emit_additional_context(context_str)
+        return 0
+
+    target_file = trigger.target_file
+    if target_file is None:
+        log_error(f"{trigger.kind} trigger without target_file; skipping.")
         return 0
 
     # 存在確認は doc_smart 以外の全 trigger_kind に対して共通で実行する。
     # この分岐でのみ早期リターンするため、以降の backup_target_file() や
     # ensure_history_dir() は target_file が存在する場合にしか到達しない。
     if not target_file.exists():
-        result = {"additionalContext": build_missing_context(target_file)}
-        json.dump(result, sys.stdout, ensure_ascii=False)
+        emit_additional_context(build_missing_context(target_file))
         return 0
 
     # ここに到達した時点でターゲットファイルの存在が保証されている。
     backup_path = backup_target_file(target_file)
+    if backup_path is None:
+        # 堅牢性優先: バックアップを作れない状況では更新コンテキストを返さず、
+        # Claude に中止報告だけさせる。データ損失リスクを回避する。
+        emit_additional_context(build_backup_failed_context(target_file))
+        return 0
 
     history_path = get_history_path(cwd)
     try:
@@ -428,15 +467,14 @@ def main() -> int:
     except Exception as exc:
         log_error(f"Failed to create history directory for {history_path}: {exc}")
 
-    if trigger_kind == "claude":
+    if trigger.kind == "claude":
         context_str = build_claude_context(target_file, history_path, backup_path)
-    elif trigger_kind == "claude_append":
+    elif trigger.kind == "claude_append":
         context_str = build_claude_append_context(target_file, history_path, backup_path)
     else:
         context_str = build_master_context(target_file, history_path, backup_path)
 
-    result = {"additionalContext": context_str}
-    json.dump(result, sys.stdout, ensure_ascii=False)
+    emit_additional_context(context_str)
     return 0
 
 
