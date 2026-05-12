@@ -4,6 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
+![Claude Code Hooks System: event-driven guardrails for safer AI coding](docs/assets/claude-code-hooks-hero.png)
+
 Stop hooks and UserPromptSubmit hooks for **Claude Code quality guardrails**.
 They block user-delegation, false completion, and low-signal workflow slips before they become bad habits in daily use.
 
