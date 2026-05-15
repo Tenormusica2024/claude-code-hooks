@@ -92,6 +92,22 @@ tdd-guard  agent-test  e2e-auth-test  backend-test
 
 ---
 
+### external-task-completion-hook.py
+外部ツール / watcher / runner のタスク完了 JSON を評価する汎用 completion gate。
+
+最初のプロファイルは Pane Auto v2 preflight 向けで、`pane_auto_v2_preflight.py` の JSON report または `PostToolUse` の Bash 出力から以下を確認する。
+
+- `ok=true`
+- `steps` が存在する
+- 各 step の `returncode=0`
+- dry-run ではない
+- `pytest` / `test` 相当の step が含まれる
+
+Codex では自然文の「完了」語彙に依存した hook が安定しにくいため、`worked for` 等の画面兆候ではなく **preflight / runner の終了時点** でこの gate を呼ぶ想定。
+詳細は `docs/external-task-completion-hook.md` を参照。
+
+---
+
 ### document-update-detector.py（UserPromptSubmit hook）
 「CLAUDE.mdを更新して」「マスタードキュメントを更新して」等の更新指示を検出し、対象ファイルをバックアップしてから用途別の更新コンテキストをClaudeに注入する。
 
@@ -146,6 +162,7 @@ claude-code-hooks/
     completion-hook.py
     document-update-detector.py
     global-claude-md-appender.py
+    external-task-completion-hook.py
     hook_utils.py
     project_classifier.py
     test-complete-hook.py
