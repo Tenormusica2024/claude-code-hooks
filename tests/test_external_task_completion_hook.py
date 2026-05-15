@@ -76,7 +76,7 @@ def test_posttooluse_unrelated_command_noops():
     assert payload["decision"] == "noop"
 
 
-def test_posttooluse_prefight_command_parses_prefixed_stdout_and_blocks_failure():
+def test_posttooluse_preflight_command_parses_prefixed_stdout_and_blocks_failure():
     report = successful_preflight_report()
     report["ok"] = False
     report["steps"][0]["returncode"] = 1
@@ -95,6 +95,58 @@ def test_posttooluse_prefight_command_parses_prefixed_stdout_and_blocks_failure(
     assert "returncode=1" in payload["reason"]
 
 
+def test_posttooluse_preflight_command_ignores_unrelated_json_before_report():
+    report = successful_preflight_report()
+    hook_input = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "python .\\pane_auto_v2_preflight.py"},
+        "tool_response": {
+            "stdout": json.dumps({"progress": "starting"}, ensure_ascii=False)
+            + "\n"
+            + json.dumps(report, ensure_ascii=False)
+        },
+    }
+    result = run_hook(hook_input)
+    payload = parse_stdout(result)
+    assert result.returncode == 0
+    assert payload["decision"] == "pass"
+
+
+def test_posttooluse_preflight_command_blocks_when_report_missing():
+    hook_input = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "python .\\pane_auto_v2_preflight.py"},
+        "tool_response": {"stdout": "preflight started but JSON was truncated"},
+    }
+    result = run_hook(hook_input, "--strict-exit")
+    payload = parse_stdout(result)
+    assert result.returncode == 1
+    assert payload["decision"] == "block"
+    assert payload["blockers"] == ["profile_command_no_report"]
+
+
+def test_require_report_blocks_empty_direct_wrapper_input():
+    result = subprocess.run(
+        [sys.executable, str(HOOK), "--json", "--strict-exit", "--require-report"],
+        input=b"",
+        capture_output=True,
+    )
+    payload = parse_stdout(result)
+    assert result.returncode == 1
+    assert payload["decision"] == "block"
+    assert payload["blockers"] == ["empty_input"]
+
+
+def test_require_report_blocks_unparseable_direct_wrapper_output():
+    result = run_hook({"_raw_text": "preflight crashed before JSON"}, "--strict-exit", "--require-report")
+    payload = parse_stdout(result)
+    assert result.returncode == 1
+    assert payload["decision"] == "block"
+    assert payload["blockers"] == ["no_report"]
+
+
 def test_missing_test_step_blocks():
     report = successful_preflight_report()
     report["steps"][0]["name"] = "lint"
@@ -105,3 +157,12 @@ def test_missing_test_step_blocks():
     assert payload["decision"] == "block"
     assert "no test-like step" in payload["reason"]
 
+
+def test_missing_returncode_blocks():
+    report = successful_preflight_report()
+    del report["steps"][0]["returncode"]
+    result = run_hook(report, "--strict-exit")
+    payload = parse_stdout(result)
+    assert result.returncode == 1
+    assert payload["decision"] == "block"
+    assert "missing returncode" in payload["reason"]

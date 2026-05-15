@@ -126,13 +126,18 @@ def _command_matches_profile(command: str, profile: str) -> bool:
     return any(marker in lowered for marker in PANE_AUTO_V2_PREFLIGHT_MARKERS)
 
 
-def _decode_json_object_from_text(text: str) -> dict[str, Any] | None:
+def _looks_like_preflight_report(payload: dict[str, Any]) -> bool:
+    return isinstance(payload.get("steps"), list) and ("ok" in payload or "schema_version" in payload)
+
+
+def _decode_preflight_report_from_text(text: str) -> dict[str, Any] | None:
     stripped = text.strip()
     if not stripped:
         return None
     try:
         parsed = json.loads(stripped)
-        return parsed if isinstance(parsed, dict) else None
+        if isinstance(parsed, dict) and _looks_like_preflight_report(parsed):
+            return parsed
     except json.JSONDecodeError:
         pass
 
@@ -143,13 +148,9 @@ def _decode_json_object_from_text(text: str) -> dict[str, Any] | None:
             parsed, _end = decoder.raw_decode(candidate)
         except json.JSONDecodeError:
             continue
-        if isinstance(parsed, dict):
+        if isinstance(parsed, dict) and _looks_like_preflight_report(parsed):
             return parsed
     return None
-
-
-def _looks_like_preflight_report(payload: dict[str, Any]) -> bool:
-    return isinstance(payload.get("steps"), list) and ("ok" in payload or "schema_version" in payload)
 
 
 def _extract_report(payload: dict[str, Any], *, profile: str, always_evaluate: bool) -> tuple[dict[str, Any] | None, str]:
@@ -157,13 +158,16 @@ def _extract_report(payload: dict[str, Any], *, profile: str, always_evaluate: b
         return payload, "direct_report"
 
     command = _extract_command(payload)
+    command_matches = bool(command and _command_matches_profile(command, profile))
     if command and not always_evaluate and not _command_matches_profile(command, profile):
         return None, "unrelated_tool"
 
     output_text = _extract_tool_output(payload)
-    report = _decode_json_object_from_text(output_text)
-    if report and _looks_like_preflight_report(report):
+    report = _decode_preflight_report_from_text(output_text)
+    if report:
         return report, "tool_output_report"
+    if command_matches:
+        return None, "profile_command_no_report"
     return None, "no_report"
 
 
@@ -279,15 +283,20 @@ def evaluate_preflight_report(
     advisories: list[str] = []
     steps = [step for step in report.get("steps", []) if isinstance(step, dict)]
     failed_steps = []
+    unknown_returncode_steps = []
     for step in steps:
         returncode = _step_returncode(step)
-        if returncode is not None and returncode != 0:
+        if returncode is None:
+            unknown_returncode_steps.append(_step_name(step))
+        elif returncode != 0:
             failed_steps.append(f"{_step_name(step)} returncode={returncode}")
 
     if report.get("ok") is not True:
         blockers.append("preflight report ok is not true")
     if failed_steps:
         blockers.append("failed step(s): " + ", ".join(failed_steps))
+    if unknown_returncode_steps:
+        blockers.append("step(s) missing returncode: " + ", ".join(unknown_returncode_steps))
     if not steps:
         blockers.append("preflight report has no steps")
     if not allow_dry_run and (report.get("dry_run") or any(step.get("dry_run") for step in steps)):
@@ -325,6 +334,7 @@ def evaluate_preflight_report(
         "ok": report.get("ok"),
         "step_count": len(steps),
         "failed_step_count": len(failed_steps),
+        "unknown_returncode_step_count": len(unknown_returncode_steps),
         "dry_run": bool(report.get("dry_run") or any(step.get("dry_run") for step in steps)),
         "has_test_step": _has_test_step(steps),
         "repo_root": repo_root_text,
@@ -351,12 +361,31 @@ def evaluate_preflight_report(
 def evaluate_payload(args: argparse.Namespace) -> GateResult:
     payload = _load_payload(args.input)
     if payload is None:
+        if args.require_report:
+            return GateResult(
+                decision="block",
+                reason="external task completion report is required but input was empty",
+                blockers=["empty_input"],
+            )
         return GateResult(decision="noop", reason="empty input")
 
     report, state = _extract_report(payload, profile=args.profile, always_evaluate=args.always_evaluate)
     if report is None:
         if state == "unrelated_tool":
             return GateResult(decision="noop", reason="tool command is unrelated to selected profile")
+        if state == "profile_command_no_report":
+            return GateResult(
+                decision="block",
+                reason="profile command completed but no preflight JSON report was found",
+                source="pane_auto_v2_preflight",
+                blockers=["profile_command_no_report"],
+            )
+        if args.require_report:
+            return GateResult(
+                decision="block",
+                reason="external task completion report is required but no report was found",
+                blockers=["no_report"],
+            )
         if args.profile == "pane-auto-v2-preflight":
             return GateResult(decision="noop", reason="no pane auto v2 preflight JSON report found")
         return GateResult(decision="block", reason="no external task completion report found", blockers=["no_report"])
@@ -381,6 +410,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-clean-git", action="store_true", help="Block if repo_root has uncommitted or untracked changes")
     parser.add_argument("--require-pushed", action="store_true", help="Block if repo_root has commits ahead of upstream")
     parser.add_argument("--require-doc-evidence", action="store_true", help="Block unless report has documentation update evidence")
+    parser.add_argument("--require-report", action="store_true", help="Block when stdin/file does not contain a completion report; useful for direct wrappers")
     parser.add_argument("--json", action="store_true", help="Print pass/noop results too; block results are always printed")
     parser.add_argument("--strict-exit", action="store_true", help="Exit 1 when the gate blocks")
     return parser.parse_args()
