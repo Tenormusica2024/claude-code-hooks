@@ -32,7 +32,35 @@ Codex は Claude Code と比べて、会話中の「完了」「done」などの
 
 ## 直接呼び出し
 
-Pane Auto v2 preflight の JSON をそのまま渡す場合:
+### 推奨: 明示 runner 方式
+
+作業中に先に hook が発動する事故を避けたい場合は、`PostToolUse` に常時登録せず、`external-task-completion-runner.py` 経由で final preflight を実行します。
+
+この方式では、preflight コマンドのプロセスが終了した後にだけ completion gate が走ります。
+通常の作業中の Bash / Edit / Write / Stop では発火しません。
+
+```powershell
+python C:\Users\<USERNAME>\.claude\hooks\external-task-completion-runner.py --profile pane-auto-v2-preflight --gate-json -- `
+  python .\pane_auto_v2_preflight.py
+```
+
+dry-run の接続確認時だけ:
+
+```powershell
+python C:\Users\<USERNAME>\.claude\hooks\external-task-completion-runner.py --profile pane-auto-v2-preflight --allow-dry-run --gate-json -- `
+  python .\pane_auto_v2_preflight.py --dry-run --skip-smoke
+```
+
+runner は以下の順序で動きます。
+
+1. `--` 以降の外部コマンドを実行する
+2. 外部コマンド終了後に stdout の preflight JSON を gate に渡す
+3. 外部コマンド自体が失敗した場合は、その終了コードを優先して失敗にする
+4. 外部コマンドは成功しても gate が block した場合は失敗にする
+
+### Pipe 方式
+
+既存の preflight 実行を保ったまま JSON を渡す場合:
 
 ```powershell
 python .\pane_auto_v2_preflight.py |
@@ -50,6 +78,9 @@ python .\pane_auto_v2_preflight.py --dry-run |
 これにより、preflight が JSON を出す前に落ちた / stdout が空だったケースを no-op ではなく block として扱えます。
 
 ## PostToolUse hook として使う例
+
+原則として、Pane Auto v2 の final preflight では上の **明示 runner 方式** を優先してください。
+PostToolUse 常時登録は「作業中に意図より早く hook が発動する」リスクがあるため、実験用途または対象コマンドをかなり絞れる環境向けです。
 
 `Bash` / shell tool の完了後に hook し、コマンドが `pane_auto_v2_preflight.py` を含む場合だけ評価します。
 関係ない Bash コマンドでは no-op です。

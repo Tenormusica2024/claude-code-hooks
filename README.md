@@ -106,6 +106,11 @@ tdd-guard  agent-test  e2e-auth-test  backend-test
 Codex では自然文の「完了」語彙に依存した hook が安定しにくいため、`worked for` 等の画面兆候ではなく **preflight / runner の終了時点** でこの gate を呼ぶ想定。
 詳細は `docs/external-task-completion-hook.md` を参照。
 
+### external-task-completion-runner.py
+`--` 以降の外部コマンドを先に最後まで実行し、その終了後にだけ `external-task-completion-hook.py` を呼ぶ明示実行型 runner。
+
+Pane Auto v2 final preflight のように「作業中に先に hook が発動する」のを避けたい場面では、PostToolUse 常時登録ではなくこの runner 方式を推奨する。
+
 ---
 
 ### document-update-detector.py（UserPromptSubmit hook）
@@ -163,6 +168,7 @@ claude-code-hooks/
     document-update-detector.py
     global-claude-md-appender.py
     external-task-completion-hook.py
+    external-task-completion-runner.py
     hook_utils.py
     project_classifier.py
     test-complete-hook.py
